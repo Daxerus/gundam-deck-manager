@@ -1,0 +1,22 @@
+name = "gundam-deck-manager"
+main = "src/index.ts"
+compatibility_date = "2025-01-15"
+
+# Cloudflare D1 (SQLite). database_id is filled in after `wrangler d1 create gundam-deck-manager`.
+[[d1_databases]]
+binding = "DB"
+database_name = "gundam-deck-manager"
+database_id = "PLACEHOLDER_RUN_WRANGLER_D1_CREATE"
+migrations_dir = "migrations"
+
+# Static SPA assets built by the web workspace into ./public.
+# API routes hit the Worker first; everything else serves the SPA with client-side routing.
+[assets]
+directory = "./public"
+binding = "ASSETS"
+not_found_handling = "single-page-application"
+run_worker_first = ["/api/*"]
+
+[vars]
+# Non-secret config. Secrets (APP_PASSWORD, JWT_SECRET, REGISTRATION_CODE) via `wrangler secret put`.
+GCG_API_BASE = "https://api.gcgapi.com"
