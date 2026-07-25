@@ -73,14 +73,27 @@ export function CardTile({
         </div>
       </div>
 
-      {onChangeOwned && (
-        <div className="flex items-stretch border-t border-line">
-          <StepBtn label="−" onClick={() => onChangeOwned(Math.max(0, owned - 1))} disabled={owned <= 0} />
-          <div className="flex-1 border-x border-line py-1 text-center font-mono text-sm text-ink">{owned}</div>
-          <StepBtn label="+" onClick={() => onChangeOwned(owned + 1)} tone="ok" />
-        </div>
-      )}
+      {onChangeOwned && <QuantityStepper value={owned} onChange={onChangeOwned} />}
       {footer}
+    </div>
+  );
+}
+
+/** Shared − / qty / + controls used by catalog, collection and deck editor. */
+export function QuantityStepper({
+  value,
+  onChange,
+  min = 0,
+}: {
+  value: number;
+  onChange: (next: number) => void;
+  min?: number;
+}) {
+  return (
+    <div className="flex items-stretch border-t border-line">
+      <StepBtn label="−" onClick={() => onChange(Math.max(min, value - 1))} disabled={value <= min} />
+      <div className="flex-1 border-x border-line py-1 text-center font-mono text-sm text-ink">{value}</div>
+      <StepBtn label="+" onClick={() => onChange(value + 1)} tone="ok" />
     </div>
   );
 }

@@ -1,5 +1,7 @@
 -- Deck composition by playable identity (card_number); physical allocations stay per product_id.
 -- Aggregates existing deck_cards rows that referenced different printings of the same card.
+-- Indexes are created AFTER rename so their names do not collide with legacy indexes
+-- still attached to the pre-migration deck_cards table.
 
 CREATE TABLE `deck_cards_new` (
   `id` integer PRIMARY KEY AUTOINCREMENT NOT NULL,
@@ -8,10 +10,6 @@ CREATE TABLE `deck_cards_new` (
   `quantity` integer DEFAULT 1 NOT NULL,
   FOREIGN KEY (`deck_id`) REFERENCES `decks`(`id`) ON UPDATE no action ON DELETE cascade
 );
---> statement-breakpoint
-CREATE UNIQUE INDEX IF NOT EXISTS `uniq_deck_card` ON `deck_cards_new` (`deck_id`,`card_number`);
---> statement-breakpoint
-CREATE INDEX IF NOT EXISTS `idx_deck_cards_deck` ON `deck_cards_new` (`deck_id`);
 --> statement-breakpoint
 INSERT INTO `deck_cards_new` (`deck_id`, `card_number`, `quantity`)
 SELECT
@@ -25,3 +23,7 @@ GROUP BY dc.`deck_id`, COALESCE(c.`card_number`, dc.`product_id`);
 DROP TABLE `deck_cards`;
 --> statement-breakpoint
 ALTER TABLE `deck_cards_new` RENAME TO `deck_cards`;
+--> statement-breakpoint
+CREATE UNIQUE INDEX IF NOT EXISTS `uniq_deck_card` ON `deck_cards` (`deck_id`,`card_number`);
+--> statement-breakpoint
+CREATE INDEX IF NOT EXISTS `idx_deck_cards_deck` ON `deck_cards` (`deck_id`);

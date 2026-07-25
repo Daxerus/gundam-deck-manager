@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { Panel, HudButton, StatusBadge } from '../components/hud';
 import { Filters } from '../components/Filters';
-import { CardImage } from '../components/CardTile';
+import { CardImage, QuantityStepper } from '../components/CardTile';
 import {
   useInfiniteCards,
   useDeck,
@@ -200,12 +200,6 @@ function DeckContents({
 
   return (
     <div className="space-y-5">
-      <p className="font-mono text-[10px] text-muted">
-        <span className="hidden sm:inline">
-          Clic <span className="text-ok">+1</span> · Shift+clic <span className="text-alert">−1</span>
-        </span>
-        <span className="sm:hidden">Mantén pulsado para modificar la cantidad de cada carta</span>
-      </p>
       <DeckTypeSection label="Units" entries={units} onSet={onSet} onPreview={onPreview} />
       <DeckTypeSection
         label="Pilots / Commands / Bases"
@@ -266,63 +260,31 @@ function DeckCardTile({
   onSet: (cardNumber: string, quantity: number) => void;
   onPreview: (card: Card | null) => void;
 }) {
-  const longPress = useLongPressControls({ onOpen: () => onPreview(null) });
   const cc = colorClasses(entry.card?.color);
   const stock =
     entry.owned <= 0 ? 'none' : entry.owned < entry.quantity ? 'partial' : 'ok';
   const stockBorder =
     stock === 'none' ? 'border-alert/70' : stock === 'partial' ? 'border-amber/70' : cc.border;
-  const stockBadge =
-    stock === 'none'
-      ? 'border-alert/50 text-alert'
-      : stock === 'partial'
-        ? 'border-amber/50 text-amber'
-        : 'border-ok/50 text-ok';
 
   return (
     <div
-      ref={longPress.ref}
-      role="button"
-      tabIndex={0}
-      className={`group relative border ${stockBorder} bg-panel/50 outline-none transition hover:shadow-hud focus:shadow-hud`}
-      title={`${entry.card?.name ?? entry.cardNumber} — clic: +1 · shift+clic: −1`}
-      aria-label={`${entry.card?.name ?? entry.cardNumber}, ${entry.quantity} copias`}
-      onClick={(event) => {
-        if (longPress.consumeClick()) return;
-        if (longPress.open) {
-          longPress.close();
-          return;
-        }
-        if (isTouchUi()) {
-          onPreview(entry.card);
-          return;
-        }
-        onSet(entry.cardNumber, event.shiftKey ? Math.max(0, entry.quantity - 1) : entry.quantity + 1);
-        onPreview(entry.card);
-      }}
-      onKeyDown={(event) => {
-        if (event.key !== 'Enter' && event.key !== ' ') return;
-        event.preventDefault();
-        if (isTouchUi()) {
-          onPreview(entry.card);
-          return;
-        }
-        onSet(entry.cardNumber, event.shiftKey ? Math.max(0, entry.quantity - 1) : entry.quantity + 1);
-        onPreview(entry.card);
-      }}
-      {...longPress.handlers}
+      className={`group relative border ${stockBorder} bg-panel/50 transition hover:shadow-hud`}
       onMouseEnter={() => {
-        if (longPress.open || !canHoverPreview()) return;
+        if (!canHoverPreview()) return;
         onPreview(entry.card);
       }}
       onMouseLeave={() => {
         if (!canHoverPreview()) return;
         onPreview(null);
       }}
-      onFocus={(event) => event.currentTarget.matches(':focus-visible') && onPreview(entry.card)}
-      onBlur={() => onPreview(null)}
     >
-      <div className="aspect-[5/7] w-full overflow-hidden">
+      <button
+        type="button"
+        className="relative block aspect-[5/7] w-full overflow-hidden outline-none focus:shadow-hud"
+        title={entry.card?.name ?? entry.cardNumber}
+        aria-label={`Vista previa de ${entry.card?.name ?? entry.cardNumber}`}
+        onClick={() => onPreview(entry.card)}
+      >
         {entry.card ? (
           <CardImage card={entry.card} />
         ) : (
@@ -330,19 +292,11 @@ function DeckCardTile({
             {entry.cardNumber}
           </span>
         )}
-      </div>
-      {longPress.open && (
-        <QuantityOverlay
-          quantity={entry.quantity}
-          onAdd={() => onSet(entry.cardNumber, entry.quantity + 1)}
-          onRemove={() => onSet(entry.cardNumber, Math.max(0, entry.quantity - 1))}
-        />
-      )}
-      <span
-        className={`pointer-events-none absolute right-0.5 top-0.5 z-30 border bg-void/90 px-1.5 font-mono text-[16px] ${stockBadge}`}
-      >
-        ×{entry.quantity}
-      </span>
+      </button>
+      <QuantityStepper
+        value={entry.quantity}
+        onChange={(quantity) => onSet(entry.cardNumber, quantity)}
+      />
     </div>
   );
 }
@@ -472,11 +426,7 @@ function AddCards({
         />
       </div>
       <p className="mb-3 font-mono text-[10px] text-muted">
-        <span className="hidden sm:inline">
-          Clic <span className="text-ok">+1</span> · Shift+clic <span className="text-alert">−1</span>
-          {' · '}una ficha por identidad (normal + alter suman)
-        </span>
-        <span className="sm:hidden">Mantén pulsado para modificar cantidad</span>
+        Una ficha por identidad (normal + alter suman). Usa − / + para la cantidad en el deck.
       </p>
       <div ref={scrollRef} className="grid max-h-[520px] grid-cols-2 gap-2 overflow-auto sm:grid-cols-4">
         {items.map((card) => (
@@ -516,214 +466,37 @@ function AddCardTile({
 }) {
   // Representative printing only — deck composition is by card_number.
   const quantity = getQty(card.cardNumber);
-  const longPress = useLongPressControls({ onOpen: () => onPreview(null) });
   const cc = colorClasses(card.color);
 
   return (
     <div
-      ref={longPress.ref}
-      role="button"
-      tabIndex={0}
-      className={`group relative border ${cc.border} bg-panel/50 outline-none transition hover:shadow-hud focus:shadow-hud`}
-      title={`${card.name} (${card.cardNumber}) — clic: +1 · shift+clic: −1`}
-      aria-label={`${card.name}, ${quantity} copias en el deck`}
-      onClick={(event) => {
-        if (longPress.consumeClick()) return;
-        if (longPress.open) {
-          longPress.close();
-          return;
-        }
-        if (isTouchUi()) {
-          onPreview(card);
-          return;
-        }
-        onAdd(card.cardNumber, event.shiftKey ? Math.max(0, quantity - 1) : quantity + 1);
-        onPreview(card);
-      }}
-      onKeyDown={(event) => {
-        if (event.key !== 'Enter' && event.key !== ' ') return;
-        event.preventDefault();
-        if (isTouchUi()) {
-          onPreview(card);
-          return;
-        }
-        onAdd(card.cardNumber, event.shiftKey ? Math.max(0, quantity - 1) : quantity + 1);
-        onPreview(card);
-      }}
-      {...longPress.handlers}
+      className={`group relative border ${cc.border} bg-panel/50 transition hover:shadow-hud`}
       onMouseEnter={() => {
-        if (longPress.open || !canHoverPreview()) return;
+        if (!canHoverPreview()) return;
         onPreview(card);
       }}
       onMouseLeave={() => {
         if (!canHoverPreview()) return;
         onPreview(null);
       }}
-      onFocus={(event) => event.currentTarget.matches(':focus-visible') && onPreview(card)}
-      onBlur={() => onPreview(null)}
     >
-      <div className="aspect-[5/7] w-full overflow-hidden">
+      <button
+        type="button"
+        className="relative block aspect-[5/7] w-full overflow-hidden outline-none focus:shadow-hud"
+        title={`${card.name} (${card.cardNumber})`}
+        aria-label={`Vista previa de ${card.name}`}
+        onClick={() => onPreview(card)}
+      >
         <CardImage card={card} />
-      </div>
-      {longPress.open && (
-        <QuantityOverlay
-          quantity={quantity}
-          onAdd={() => onAdd(card.cardNumber, quantity + 1)}
-          onRemove={() => onAdd(card.cardNumber, Math.max(0, quantity - 1))}
-        />
-      )}
-      {!longPress.open && (
-        <button
-          type="button"
-          className="absolute bottom-1 left-1/2 z-30 flex h-8 w-8 -translate-x-1/2 items-center justify-center border border-ok/60 bg-void/85 font-display text-xl text-ok shadow-hud active:bg-ok/25 sm:hidden"
-          aria-label={`Añadir una copia de ${card.name}`}
-          onPointerDown={(event) => event.stopPropagation()}
-          onClick={(event) => {
-            event.stopPropagation();
-            onAdd(card.cardNumber, quantity + 1);
-          }}
-        >
-          +
-        </button>
-      )}
-      {(quantity > 0 || longPress.open) && (
-        <span className="pointer-events-none absolute right-0.5 top-0.5 z-30 border border-ok/50 bg-void/85 px-1.5 font-mono text-[16px] text-ok">
-          {quantity}
-        </span>
-      )}
-    </div>
-  );
-}
-
-function QuantityOverlay({
-  quantity,
-  onAdd,
-  onRemove,
-}: {
-  quantity: number;
-  onAdd: () => void;
-  onRemove: () => void;
-}) {
-  const stop = (event: React.SyntheticEvent) => {
-    event.stopPropagation();
-  };
-
-  return (
-    <div
-      className="absolute inset-0 z-20 grid grid-rows-2 bg-void/55 backdrop-blur-[1px]"
-      onClick={stop}
-      onPointerDown={stop}
-      onPointerUp={stop}
-      onPointerMove={stop}
-    >
-      <button
-        type="button"
-        className="flex items-center justify-center border-b border-ok/50 bg-ok/10 font-display text-4xl text-ok active:bg-ok/25"
-        aria-label="Añadir una copia"
-        onPointerDown={stop}
-        onClick={(event) => {
-          event.stopPropagation();
-          onAdd();
-        }}
-      >
-        +
       </button>
-      <button
-        type="button"
-        disabled={quantity <= 0}
-        className="flex items-center justify-center bg-alert/10 font-display text-4xl text-alert active:bg-alert/25 disabled:opacity-30"
-        aria-label="Restar una copia"
-        onPointerDown={stop}
-        onClick={(event) => {
-          event.stopPropagation();
-          onRemove();
-        }}
-      >
-        −
-      </button>
+      <QuantityStepper
+        value={quantity}
+        onChange={(next) => onAdd(card.cardNumber, next)}
+      />
     </div>
   );
 }
 
 function canHoverPreview() {
   return typeof window !== 'undefined' && window.matchMedia('(hover: hover) and (pointer: fine)').matches;
-}
-
-function isTouchUi() {
-  return !canHoverPreview();
-}
-
-function useLongPressControls({
-  delay = 450,
-  onOpen,
-}: {
-  delay?: number;
-  onOpen?: () => void;
-} = {}) {
-  const [open, setOpen] = useState(false);
-  const rootRef = useRef<HTMLDivElement | null>(null);
-  const timerRef = useRef<number | null>(null);
-  const startPointRef = useRef<{ x: number; y: number } | null>(null);
-  const suppressClickRef = useRef(false);
-  const onOpenRef = useRef(onOpen);
-  onOpenRef.current = onOpen;
-
-  const cancelTimer = () => {
-    if (timerRef.current !== null) {
-      window.clearTimeout(timerRef.current);
-      timerRef.current = null;
-    }
-    startPointRef.current = null;
-  };
-
-  const close = () => setOpen(false);
-
-  useEffect(() => cancelTimer, []);
-
-  useEffect(() => {
-    if (!open) return;
-
-    const onPointerDownOutside = (event: PointerEvent) => {
-      const root = rootRef.current;
-      if (!root || root.contains(event.target as Node)) return;
-      setOpen(false);
-    };
-
-    document.addEventListener('pointerdown', onPointerDownOutside, true);
-    return () => document.removeEventListener('pointerdown', onPointerDownOutside, true);
-  }, [open]);
-
-  return {
-    open,
-    ref: rootRef,
-    close,
-    consumeClick: () => {
-      if (!suppressClickRef.current) return false;
-      suppressClickRef.current = false;
-      return true;
-    },
-    handlers: {
-      onPointerDown: (event: React.PointerEvent<HTMLDivElement>) => {
-        if (event.pointerType === 'mouse' && event.button !== 0) return;
-        if ((event.target as HTMLElement).closest('button')) return;
-        cancelTimer();
-        startPointRef.current = { x: event.clientX, y: event.clientY };
-        timerRef.current = window.setTimeout(() => {
-          suppressClickRef.current = true;
-          onOpenRef.current?.();
-          setOpen(true);
-          timerRef.current = null;
-          navigator.vibrate?.(30);
-        }, delay);
-      },
-      onPointerMove: (event: React.PointerEvent<HTMLDivElement>) => {
-        const start = startPointRef.current;
-        if (!start || Math.hypot(event.clientX - start.x, event.clientY - start.y) <= 10) return;
-        cancelTimer();
-      },
-      onPointerUp: cancelTimer,
-      onPointerCancel: cancelTimer,
-      onContextMenu: (event: React.MouseEvent<HTMLDivElement>) => event.preventDefault(),
-    },
-  };
 }
