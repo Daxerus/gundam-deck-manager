@@ -1,0 +1,98 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    color-scheme: dark;
+  }
+
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+
+  body {
+    margin: 0;
+    background-color: theme('colors.void');
+    background-image:
+      radial-gradient(ellipse at 50% -20%, rgba(47, 228, 232, 0.08), transparent 60%),
+      linear-gradient(rgba(47, 228, 232, 0.05) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(47, 228, 232, 0.05) 1px, transparent 1px);
+    background-size: 100% 100%, 40px 40px, 40px 40px;
+    color: theme('colors.ink');
+    font-family: theme('fontFamily.ui');
+    -webkit-font-smoothing: antialiased;
+  }
+
+  ::selection {
+    background: rgba(47, 228, 232, 0.3);
+  }
+
+  /* Slim HUD scrollbars */
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: rgba(47, 228, 232, 0.35) transparent;
+  }
+  *::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+  *::-webkit-scrollbar-thumb {
+    background: rgba(47, 228, 232, 0.35);
+    border-radius: 4px;
+  }
+}
+
+@layer components {
+  /* Angular beveled HUD frame via clip-path */
+  .hud-clip {
+    clip-path: polygon(
+      0 10px,
+      10px 0,
+      calc(100% - 10px) 0,
+      100% 10px,
+      100% calc(100% - 10px),
+      calc(100% - 10px) 100%,
+      10px 100%,
+      0 calc(100% - 10px)
+    );
+  }
+
+  .hud-label {
+    @apply font-display uppercase tracking-[0.2em] text-hud;
+  }
+
+  .hud-input {
+    @apply bg-void/60 border border-line px-3 py-2 font-ui text-ink outline-none;
+    @apply focus:border-hud focus:shadow-hud placeholder:text-muted/60;
+  }
+}
+
+/* Global scanline + vignette overlay (disabled for reduced motion / handled by component) */
+.scanlines::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 50;
+  background: repeating-linear-gradient(
+    to bottom,
+    rgba(0, 0, 0, 0) 0,
+    rgba(0, 0, 0, 0) 2px,
+    rgba(0, 0, 0, 0.18) 3px
+  );
+  mix-blend-mode: multiply;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .animate-flicker,
+  .animate-blink,
+  .animate-sweep {
+    animation: none !important;
+  }
+  .scanlines::before {
+    display: none;
+  }
+}
