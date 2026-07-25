@@ -1,0 +1,24 @@
+{
+  "name": "gundam-deck-manager",
+  "version": "0.1.0",
+  "private": true,
+  "workspaces": [
+    "web",
+    "worker"
+  ],
+  "scripts": {
+    "dev": "concurrently --kill-others --names web,worker \"npm:dev:web\" \"npm:dev:worker\"",
+    "dev:web": "npm run dev -w web",
+    "dev:worker": "npm run dev -w worker",
+    "build:web": "npm run build -w web",
+    "build": "npm run build:web && echo built web -> worker/public",
+    "test": "npm run test -w worker",
+    "deploy": "npm run build && npm run deploy -w worker"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "devDependencies": {
+    "concurrently": "^10.0.4"
+  }
+}
