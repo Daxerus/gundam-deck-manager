@@ -60,7 +60,11 @@ export function Login() {
       navigate(from, { replace: true });
     } catch (err) {
       const msg =
-        err instanceof ApiError ? err.message : 'ACCESO DENEGADO — credenciales incorrectas';
+        err instanceof ApiError
+          ? err.message
+          : err instanceof Error
+            ? err.message
+            : 'ACCESO DENEGADO — credenciales incorrectas';
       setError(msg);
       setBusy(false);
     }
@@ -96,21 +100,26 @@ export function Login() {
             >
               {mode === 'bootstrap' && (
                 <label className="block">
-                  <span className="hud-label text-[10px]">Legacy passcode (APP_PASSWORD)</span>
+                  <span className="hud-label text-[10px]">
+                    1. Passcode del servidor (secreto APP_PASSWORD de Cloudflare)
+                  </span>
                   <input
                     type="password"
                     autoFocus
+                    autoComplete="off"
                     value={appPassword}
                     onChange={(e) => setAppPassword(e.target.value)}
                     className="hud-input mt-1 w-full font-mono tracking-widest"
-                    placeholder="••••••••"
+                    placeholder="secreto APP_PASSWORD"
                     required
                   />
                 </label>
               )}
 
               <label className="block">
-                <span className="hud-label text-[10px]">Username</span>
+                <span className="hud-label text-[10px]">
+                  {mode === 'bootstrap' ? '2. Username de tu cuenta nueva' : 'Username'}
+                </span>
                 <input
                   type="text"
                   autoFocus={mode !== 'bootstrap'}
@@ -124,7 +133,11 @@ export function Login() {
               </label>
 
               <label className="block">
-                <span className="hud-label text-[10px]">Password</span>
+                <span className="hud-label text-[10px]">
+                  {mode === 'bootstrap'
+                    ? '3. Password nueva de tu cuenta (≥ 8)'
+                    : 'Password'}
+                </span>
                 <input
                   type="password"
                   autoComplete={mode === 'login' ? 'current-password' : 'new-password'}

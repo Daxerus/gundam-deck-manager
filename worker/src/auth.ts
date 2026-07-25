@@ -86,41 +86,54 @@ export const authRoutes = new Hono<AppEnv>()
   })
 
   .post('/bootstrap', async (c) => {
-    const db = getDb(c.env);
-    const pending = await findPendingOwner(db);
-    if (!pending) {
-      return c.json({ error: 'Already bootstrapped' }, 409);
-    }
-    const expected = c.env.APP_PASSWORD;
-    if (!expected) {
-      return c.json({ error: 'Server not configured: APP_PASSWORD missing' }, 500);
-    }
+    try {
+      const db = getDb(c.env);
+      const pending = await findPendingOwner(db);
+      if (!pending) {
+        return c.json({ error: 'Already bootstrapped' }, 409);
+      }
+      const expected = c.env.APP_PASSWORD;
+      if (!expected) {
+        return c.json({ error: 'Server not configured: APP_PASSWORD missing' }, 500);
+      }
 
-    const body = await readJson<{ appPassword: string; username: string; password: string }>(c);
-    if (!body.appPassword || !timingSafeEqual(body.appPassword, expected)) {
-      return c.json({ error: 'Invalid credentials' }, 401);
-    }
+      const body = await readJson<{ appPassword: string; username: string; password: string }>(c);
+      const appPassword = typeof body.appPassword === 'string' ? body.appPassword.trim() : '';
+      if (!appPassword) {
+        return c.json({ error: 'Legacy passcode (APP_PASSWORD) required' }, 400);
+      }
+      // Trim both sides: dashboard/secret uploads often leave trailing newlines.
+      if (!timingSafeEqual(appPassword, expected.trim())) {
+        return c.json({ error: 'Invalid legacy passcode (APP_PASSWORD)' }, 401);
+      }
 
-    const username = validateUsername(body.username);
-    if (!username) {
+      const username = validateUsername(body.username);
+      if (!username) {
+        return c.json(
+          { error: 'Invalid username (3-32 chars: a-z, 0-9, underscore)' },
+          400,
+        );
+      }
+      const password = validatePassword(body.password);
+      if (!password) {
+        return c.json({ error: 'New account password must be 8-128 characters' }, 400);
+      }
+
+      const taken = await findUserByUsername(db, username);
+      if (taken && taken.id !== pending.id) {
+        return c.json({ error: 'Username already taken' }, 409);
+      }
+
+      const user = await completeBootstrap(db, pending, { username, password });
+      const session = await issueToken(c.env, user);
+      return c.json({ ...session, user: toPublicUser(user) });
+    } catch (err) {
+      console.error('bootstrap failed', err);
       return c.json(
-        { error: 'Invalid username (3-32 chars: a-z, 0-9, underscore)' },
-        400,
+        { error: err instanceof Error ? err.message : 'Bootstrap failed' },
+        500,
       );
     }
-    const password = validatePassword(body.password);
-    if (!password) {
-      return c.json({ error: 'Password must be 8-128 characters' }, 400);
-    }
-
-    const taken = await findUserByUsername(db, username);
-    if (taken && taken.id !== pending.id) {
-      return c.json({ error: 'Username already taken' }, 409);
-    }
-
-    const user = await completeBootstrap(db, pending, { username, password });
-    const session = await issueToken(c.env, user);
-    return c.json({ ...session, user: toPublicUser(user) });
   })
 
   .post('/register', async (c) => {

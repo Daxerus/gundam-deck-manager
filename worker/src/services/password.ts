@@ -5,7 +5,8 @@
 
 const ALGORITHM = 'PBKDF2';
 const HASH = 'SHA-256';
-const ITERATIONS = 210_000;
+/** Kept moderate for Cloudflare Workers CPU limits (free ~10–50ms). */
+const ITERATIONS = 25_000;
 const KEY_LENGTH = 32; // 256-bit
 const SALT_LENGTH = 16;
 const PENDING_MARKER = '!pending';
@@ -44,7 +45,13 @@ async function derive(password: string, salt: Uint8Array, iterations: number): P
     'deriveBits',
   ]);
   const bits = await crypto.subtle.deriveBits(
-    { name: ALGORITHM, hash: HASH, salt, iterations },
+    {
+      name: ALGORITHM,
+      hash: HASH,
+      // Copy into a plain ArrayBuffer — some Workers runtimes reject SharedArrayBuffer views.
+      salt: salt.buffer.slice(salt.byteOffset, salt.byteOffset + salt.byteLength) as ArrayBuffer,
+      iterations,
+    },
     keyMaterial,
     KEY_LENGTH * 8,
   );

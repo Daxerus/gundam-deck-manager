@@ -32,25 +32,35 @@ export async function apiFetch<T>(path: string, opts: RequestInit = {}): Promise
   if (opts.body && !headers.has('Content-Type')) headers.set('Content-Type', 'application/json');
 
   const res = await fetch(`/api${path}`, { ...opts, headers });
+  const text = await res.text();
+  let json: unknown = null;
+  if (text) {
+    try {
+      json = JSON.parse(text);
+    } catch {
+      if (res.status === 401) {
+        setToken(null);
+        unauthorizedHandler?.();
+      }
+      throw new ApiError(res.status, text.slice(0, 180) || `Error ${res.status}`);
+    }
+  }
 
   if (res.status === 401) {
     setToken(null);
     unauthorizedHandler?.();
-    const text = await res.text();
-    let message = 'No autorizado';
-    try {
-      const json = text ? JSON.parse(text) : null;
-      if (json?.error) message = json.error as string;
-    } catch {
-      /* ignore */
-    }
+    const message =
+      json && typeof json === 'object' && json !== null && 'error' in json
+        ? String((json as { error: unknown }).error)
+        : 'No autorizado';
     throw new ApiError(401, message);
   }
 
-  const text = await res.text();
-  const json = text ? JSON.parse(text) : null;
   if (!res.ok) {
-    const message = (json && (json.error as string)) || `Error ${res.status}`;
+    const message =
+      json && typeof json === 'object' && json !== null && 'error' in json
+        ? String((json as { error: unknown }).error)
+        : `Error ${res.status}`;
     throw new ApiError(res.status, message);
   }
   return json as T;
