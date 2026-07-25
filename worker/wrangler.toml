@@ -6,7 +6,7 @@ compatibility_date = "2025-01-15"
 [[d1_databases]]
 binding = "DB"
 database_name = "gundam-deck-manager"
-database_id = "PLACEHOLDER_RUN_WRANGLER_D1_CREATE"
+database_id = "dd9cdcd9-0d23-4f58-8283-36f7c288802d"
 migrations_dir = "migrations"
 
 # Static SPA assets built by the web workspace into ./public.

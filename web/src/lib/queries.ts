@@ -23,6 +23,7 @@ export interface CardFilters {
   cost?: string;
   level?: string;
   owned_only?: string;
+  group_variants?: string;
   limit?: number;
   offset?: number;
 }
@@ -138,8 +139,8 @@ export function useDeleteDeck() {
 export function useSetDeckCard(deckId: number) {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: ({ productId, quantity }: { productId: string; quantity: number }) =>
-      api.put(`/decks/${deckId}/cards`, { productId, quantity }),
+    mutationFn: ({ cardNumber, quantity }: { cardNumber: string; quantity: number }) =>
+      api.put(`/decks/${deckId}/cards`, { cardNumber, quantity }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['deck', deckId] });
       qc.invalidateQueries({ queryKey: ['decks'] });
@@ -193,7 +194,6 @@ export function useDeactivate() {
 }
 
 export interface ShoppingRow {
-  productId: string;
   cardNumber: string;
   name: string;
   owned: number;
@@ -209,10 +209,19 @@ export function useShopping() {
   });
 }
 
-export function useLocations() {
-  return useQuery({
-    queryKey: ['locations'],
-    queryFn: () => api.get<{ data: CardLocation[] }>('/locations').then((r) => r.data),
+export function useInfiniteLocations(query = '', pageSize = 60) {
+  const q = query.trim();
+  return useInfiniteQuery({
+    queryKey: ['locations', { q, limit: pageSize }],
+    initialPageParam: 0,
+    queryFn: ({ pageParam }) =>
+      api.get<Paginated<CardLocation>>(
+        `/locations${qs({ limit: pageSize, offset: pageParam, q: q || undefined })}`,
+      ),
+    getNextPageParam: (last) => {
+      const next = last._meta.offset + last._meta.count;
+      return next < last._meta.total ? next : undefined;
+    },
   });
 }
 
@@ -233,6 +242,21 @@ export function useSetLocation() {
       qc.invalidateQueries({ queryKey: ['locations'] });
       qc.invalidateQueries({ queryKey: ['decks'] });
       qc.invalidateQueries({ queryKey: ['deck'] });
+    },
+  });
+}
+
+export function useSyncCatalog() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: () =>
+      api.post<{ ok: boolean; version: string | null; cardCount: number; upserted: number }>(
+        '/admin/sync',
+      ),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['status'] });
+      qc.invalidateQueries({ queryKey: ['sets'] });
+      qc.invalidateQueries({ queryKey: ['cards'] });
     },
   });
 }

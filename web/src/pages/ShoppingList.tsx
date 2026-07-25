@@ -52,14 +52,9 @@ export function ShoppingList() {
               </thead>
               <tbody>
                 {rows.map((r) => (
-                  <tr key={r.productId} className="border-b border-line/50">
+                  <tr key={r.cardNumber} className="border-b border-line/50">
                     <td className="p-2 text-ink">{r.name}</td>
-                    <td className="px-3 text-muted">
-                      {r.cardNumber}
-                      {r.productId !== r.cardNumber && (
-                        <span className="block text-[10px] text-hud">{r.productId}</span>
-                      )}
-                    </td>
+                    <td className="px-3 text-muted">{r.cardNumber}</td>
                     <td className="px-3 text-hud">{r.owned}</td>
                     <td className="px-3 text-muted">{r.maxRequired}</td>
                     <td className="px-3 font-bold text-alert">+{r.missing}</td>

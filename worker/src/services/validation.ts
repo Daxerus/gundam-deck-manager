@@ -12,7 +12,6 @@ export const MAX_COLORS = 2;
 export const RESOURCE_DECK_SIZE = 10;
 
 export interface DeckCardInput {
-  productId: string;
   cardNumber: string;
   quantity: number;
 }
@@ -26,7 +25,6 @@ export interface CardMeta {
 }
 
 export interface ShoppingShortage {
-  productId: string;
   cardNumber: string;
   name: string;
   required: number;
@@ -47,7 +45,7 @@ export function validateDeck(
   deckCards: DeckCardInput[],
   resourceDeckSize: number,
   cardMeta: Map<string, CardMeta>,
-  owned: Map<string, number>,
+  ownedByCardNumber: Map<string, number>,
 ): ValidationResult {
   const errors: string[] = [];
   const warnings: string[] = [];
@@ -57,21 +55,18 @@ export function validateDeck(
     errors.push(`El deck principal debe tener exactamente ${MAIN_DECK_SIZE} cartas (tiene ${mainCount}).`);
   }
 
-  const copiesByCardNumber = new Map<string, number>();
   for (const dc of deckCards) {
-    copiesByCardNumber.set(dc.cardNumber, (copiesByCardNumber.get(dc.cardNumber) ?? 0) + dc.quantity);
-  }
-  for (const [cardNumber, quantity] of copiesByCardNumber) {
-    if (quantity > MAX_COPIES) {
-      const printing = deckCards.find((dc) => dc.cardNumber === cardNumber);
-      const name = printing ? cardMeta.get(printing.productId)?.name : undefined;
-      errors.push(`Máximo ${MAX_COPIES} copias por carta: ${name ?? cardNumber} (${cardNumber}) tiene ${quantity}.`);
+    if (dc.quantity > MAX_COPIES) {
+      const name = cardMeta.get(dc.cardNumber)?.name;
+      errors.push(
+        `Máximo ${MAX_COPIES} copias por carta: ${name ?? dc.cardNumber} (${dc.cardNumber}) tiene ${dc.quantity}.`,
+      );
     }
   }
 
   const colorSet = new Set<string>();
   for (const dc of deckCards) {
-    const color = cardMeta.get(dc.productId)?.color;
+    const color = cardMeta.get(dc.cardNumber)?.color;
     if (color) colorSet.add(color);
   }
   const colors = [...colorSet].sort();
@@ -85,12 +80,11 @@ export function validateDeck(
 
   const shortages: ShoppingShortage[] = [];
   for (const dc of deckCards) {
-    const have = owned.get(dc.productId) ?? 0;
+    const have = ownedByCardNumber.get(dc.cardNumber) ?? 0;
     if (dc.quantity > have) {
-      const name = cardMeta.get(dc.productId)?.name ?? dc.cardNumber;
+      const name = cardMeta.get(dc.cardNumber)?.name ?? dc.cardNumber;
       const missing = dc.quantity - have;
       shortages.push({
-        productId: dc.productId,
         cardNumber: dc.cardNumber,
         name,
         required: dc.quantity,
@@ -98,7 +92,7 @@ export function validateDeck(
         missing,
       });
       warnings.push(
-        `No tienes suficientes copias de ${name} (${dc.cardNumber}, ${dc.productId}): necesitas ${dc.quantity}, tienes ${have}.`,
+        `No tienes suficientes copias de ${name} (${dc.cardNumber}): necesitas ${dc.quantity}, tienes ${have}.`,
       );
     }
   }

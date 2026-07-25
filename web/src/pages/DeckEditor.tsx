@@ -38,7 +38,7 @@ export function DeckEditor() {
 
   const d = deck.data;
   const v = d.validation;
-  const qtyByProductId = new Map(d.cards.map((c) => [c.productId, c.quantity]));
+  const qtyByCardNumber = new Map(d.cards.map((c) => [c.cardNumber, c.quantity]));
 
   return (
     <div className="space-y-4">
@@ -108,7 +108,7 @@ export function DeckEditor() {
           ) : (
             <DeckContents
               entries={d.cards}
-              onSet={(productId, quantity) => setCard.mutate({ productId, quantity })}
+              onSet={(cardNumber, quantity) => setCard.mutate({ cardNumber, quantity })}
               onPreview={(card) => setPreview(card ? { card, side: 'deck' } : null)}
             />
           )}
@@ -125,8 +125,8 @@ export function DeckEditor() {
             />
           )}
           <AddCards
-            getQty={(productId) => qtyByProductId.get(productId) ?? 0}
-            onAdd={(productId, q) => setCard.mutate({ productId, quantity: q })}
+            getQty={(cardNumber) => qtyByCardNumber.get(cardNumber) ?? 0}
+            onAdd={(cardNumber, q) => setCard.mutate({ cardNumber, quantity: q })}
             onPreview={(card) => setPreview(card ? { card, side: 'add' } : null)}
           />
         </div>
@@ -192,7 +192,7 @@ function DeckContents({
   onPreview,
 }: {
   entries: DeckCardEntry[];
-  onSet: (productId: string, quantity: number) => void;
+  onSet: (cardNumber: string, quantity: number) => void;
   onPreview: (card: Card | null) => void;
 }) {
   const units = entries.filter((entry) => entry.card?.cardType?.toUpperCase() === 'UNIT');
@@ -225,7 +225,7 @@ function DeckTypeSection({
 }: {
   label: string;
   entries: DeckCardEntry[];
-  onSet: (productId: string, quantity: number) => void;
+  onSet: (cardNumber: string, quantity: number) => void;
   onPreview: (card: Card | null) => void;
 }) {
   const count = entries.reduce((total, entry) => total + entry.quantity, 0);
@@ -241,7 +241,7 @@ function DeckTypeSection({
         <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
           {entries.map((entry) => (
             <DeckCardTile
-              key={entry.productId}
+              key={entry.cardNumber}
               entry={entry}
               onSet={onSet}
               onPreview={onPreview}
@@ -263,7 +263,7 @@ function DeckCardTile({
   onPreview,
 }: {
   entry: DeckCardEntry;
-  onSet: (productId: string, quantity: number) => void;
+  onSet: (cardNumber: string, quantity: number) => void;
   onPreview: (card: Card | null) => void;
 }) {
   const longPress = useLongPressControls({ onOpen: () => onPreview(null) });
@@ -285,8 +285,8 @@ function DeckCardTile({
       role="button"
       tabIndex={0}
       className={`group relative border ${stockBorder} bg-panel/50 outline-none transition hover:shadow-hud focus:shadow-hud`}
-      title={`${entry.card?.name ?? entry.productId} — clic: +1 · shift+clic: −1`}
-      aria-label={`${entry.card?.name ?? entry.productId}, ${entry.quantity} copias`}
+      title={`${entry.card?.name ?? entry.cardNumber} — clic: +1 · shift+clic: −1`}
+      aria-label={`${entry.card?.name ?? entry.cardNumber}, ${entry.quantity} copias`}
       onClick={(event) => {
         if (longPress.consumeClick()) return;
         if (longPress.open) {
@@ -297,7 +297,7 @@ function DeckCardTile({
           onPreview(entry.card);
           return;
         }
-        onSet(entry.productId, event.shiftKey ? Math.max(0, entry.quantity - 1) : entry.quantity + 1);
+        onSet(entry.cardNumber, event.shiftKey ? Math.max(0, entry.quantity - 1) : entry.quantity + 1);
         onPreview(entry.card);
       }}
       onKeyDown={(event) => {
@@ -307,7 +307,7 @@ function DeckCardTile({
           onPreview(entry.card);
           return;
         }
-        onSet(entry.productId, event.shiftKey ? Math.max(0, entry.quantity - 1) : entry.quantity + 1);
+        onSet(entry.cardNumber, event.shiftKey ? Math.max(0, entry.quantity - 1) : entry.quantity + 1);
         onPreview(entry.card);
       }}
       {...longPress.handlers}
@@ -327,15 +327,15 @@ function DeckCardTile({
           <CardImage card={entry.card} />
         ) : (
           <span className="flex h-full items-center justify-center p-2 font-mono text-[9px] text-muted">
-            {entry.productId}
+            {entry.cardNumber}
           </span>
         )}
       </div>
       {longPress.open && (
         <QuantityOverlay
           quantity={entry.quantity}
-          onAdd={() => onSet(entry.productId, entry.quantity + 1)}
-          onRemove={() => onSet(entry.productId, Math.max(0, entry.quantity - 1))}
+          onAdd={() => onSet(entry.cardNumber, entry.quantity + 1)}
+          onRemove={() => onSet(entry.cardNumber, Math.max(0, entry.quantity - 1))}
         />
       )}
       <span
@@ -379,6 +379,7 @@ function DeckCardPreview({ card }: { card: Card }) {
       </div>
       <div className="px-1 py-1 font-mono text-[10px] text-muted">
         {card.cardNumber} · {card.rarity ?? 'sin rareza'}
+        {card.productId !== card.cardNumber ? ` · ${card.productId}` : ''}
       </div>
     </div>
   );
@@ -414,13 +415,14 @@ function AddCards({
   onAdd,
   onPreview,
 }: {
-  getQty: (productId: string) => number;
-  onAdd: (productId: string, quantity: number) => void;
+  getQty: (cardNumber: string) => number;
+  onAdd: (cardNumber: string, quantity: number) => void;
   onPreview: (card: Card | null) => void;
 }) {
   const [filters, setFilters] = useState<CardFilters>({
     limit: ADD_PAGE,
     exclude_card_type: 'RESOURCE',
+    group_variants: '1',
   });
   const ownedOnly = filters.owned_only === '1';
   const sets = useSets();
@@ -437,7 +439,7 @@ function AddCards({
 
   const updateFilters = (next: CardFilters) => {
     const { offset: _offset, ...rest } = next;
-    setFilters({ ...rest, exclude_card_type: 'RESOURCE' });
+    setFilters({ ...rest, exclude_card_type: 'RESOURCE', group_variants: '1' });
   };
 
   return (
@@ -472,24 +474,20 @@ function AddCards({
       <p className="mb-3 font-mono text-[10px] text-muted">
         <span className="hidden sm:inline">
           Clic <span className="text-ok">+1</span> · Shift+clic <span className="text-alert">−1</span>
+          {' · '}una ficha por identidad (normal + alter suman)
         </span>
-        <span className="sm:hidden">Mantén pulsado para modificar la cantidad de cada carta</span>
+        <span className="sm:hidden">Mantén pulsado para modificar cantidad</span>
       </p>
       <div ref={scrollRef} className="grid max-h-[520px] grid-cols-2 gap-2 overflow-auto sm:grid-cols-4">
-        {items.map((card) => {
-          const q = getQty(card.productId);
-          const cc = colorClasses(card.color);
-          return (
-            <AddCardTile
-              key={card.productId}
-              card={card}
-              quantity={q}
-              borderClass={cc.border}
-              onSet={(quantity) => onAdd(card.productId, quantity)}
-              onPreview={onPreview}
-            />
-          );
-        })}
+        {items.map((card) => (
+          <AddCardTile
+            key={card.cardNumber}
+            card={card}
+            getQty={getQty}
+            onAdd={onAdd}
+            onPreview={onPreview}
+          />
+        ))}
         <div ref={loadMoreRef} className="col-span-full h-1" />
       </div>
       <p className="mt-2 font-mono text-[10px] text-muted">
@@ -507,26 +505,27 @@ function AddCards({
 
 function AddCardTile({
   card,
-  quantity,
-  borderClass,
-  onSet,
+  getQty,
+  onAdd,
   onPreview,
 }: {
   card: Card;
-  quantity: number;
-  borderClass: string;
-  onSet: (quantity: number) => void;
+  getQty: (cardNumber: string) => number;
+  onAdd: (cardNumber: string, quantity: number) => void;
   onPreview: (card: Card | null) => void;
 }) {
+  // Representative printing only — deck composition is by card_number.
+  const quantity = getQty(card.cardNumber);
   const longPress = useLongPressControls({ onOpen: () => onPreview(null) });
+  const cc = colorClasses(card.color);
 
   return (
     <div
       ref={longPress.ref}
       role="button"
       tabIndex={0}
-      className={`group relative border ${borderClass} bg-panel/50 outline-none transition hover:shadow-hud focus:shadow-hud`}
-      title={`${card.name} — clic: +1 · shift+clic: −1`}
+      className={`group relative border ${cc.border} bg-panel/50 outline-none transition hover:shadow-hud focus:shadow-hud`}
+      title={`${card.name} (${card.cardNumber}) — clic: +1 · shift+clic: −1`}
       aria-label={`${card.name}, ${quantity} copias en el deck`}
       onClick={(event) => {
         if (longPress.consumeClick()) return;
@@ -538,7 +537,7 @@ function AddCardTile({
           onPreview(card);
           return;
         }
-        onSet(event.shiftKey ? Math.max(0, quantity - 1) : quantity + 1);
+        onAdd(card.cardNumber, event.shiftKey ? Math.max(0, quantity - 1) : quantity + 1);
         onPreview(card);
       }}
       onKeyDown={(event) => {
@@ -548,7 +547,7 @@ function AddCardTile({
           onPreview(card);
           return;
         }
-        onSet(event.shiftKey ? Math.max(0, quantity - 1) : quantity + 1);
+        onAdd(card.cardNumber, event.shiftKey ? Math.max(0, quantity - 1) : quantity + 1);
         onPreview(card);
       }}
       {...longPress.handlers}
@@ -569,8 +568,8 @@ function AddCardTile({
       {longPress.open && (
         <QuantityOverlay
           quantity={quantity}
-          onAdd={() => onSet(quantity + 1)}
-          onRemove={() => onSet(Math.max(0, quantity - 1))}
+          onAdd={() => onAdd(card.cardNumber, quantity + 1)}
+          onRemove={() => onAdd(card.cardNumber, Math.max(0, quantity - 1))}
         />
       )}
       {!longPress.open && (
@@ -581,7 +580,7 @@ function AddCardTile({
           onPointerDown={(event) => event.stopPropagation()}
           onClick={(event) => {
             event.stopPropagation();
-            onSet(quantity + 1);
+            onAdd(card.cardNumber, quantity + 1);
           }}
         >
           +

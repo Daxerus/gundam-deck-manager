@@ -1,14 +1,20 @@
 import { Hono } from 'hono';
-import { and, eq, inArray } from 'drizzle-orm';
+import { and, asc, eq, inArray } from 'drizzle-orm';
 import type { AppEnv } from '../auth';
 import { getDb } from '../db/client';
 import { allocations, cards, deckCards, decks } from '../db/schema';
 import { serializeCard } from './cards';
 import {
-  getCardMetaForProductIds,
+  aggregateOwnedByCardNumber,
+  getCardMetaForCardNumbers,
   getOwnedByProductId,
+  getPrintingsByCardNumber,
+  getProductIdToCardNumberMap,
+  isDeckBuildable,
+  isDeckComplete,
   loadDeckStates,
 } from '../services/deckState';
+import { sumAllocatedForCardNumber } from '../services/allocation';
 import { getOwnedDeck } from '../services/scope';
 import { validateDeck } from '../services/validation';
 import { readJson } from '../util/json';
@@ -22,11 +28,13 @@ export const decksRoutes = new Hono<AppEnv>()
     const owned = await getOwnedByProductId(db, userId);
     const deckRows = await db.select().from(decks).where(eq(decks.userId, userId)).all();
     const metaById = new Map(deckRows.map((d) => [d.id, d] as const));
+    const cardNumbers = [...new Set(states.flatMap((s) => Object.keys(s.required)))];
+    const printingsByCardNumber = await getPrintingsByCardNumber(db, cardNumbers);
 
     const data = states.map((s) => {
       const mainCount = Object.values(s.required).reduce((a, b) => a + b, 0);
-      const complete = isComplete(s.required, s.alloc);
-      const buildable = Object.entries(s.required).every(([productId, q]) => (owned[productId] ?? 0) >= q);
+      const complete = isDeckComplete(s.required, s.alloc, printingsByCardNumber);
+      const buildable = isDeckBuildable(s.required, owned, printingsByCardNumber);
       const d = metaById.get(s.deckId)!;
       return {
         id: s.deckId,
@@ -76,40 +84,53 @@ export const decksRoutes = new Hono<AppEnv>()
     const allocMap: Record<string, number> = {};
     for (const a of allocRows) allocMap[a.productId] = a.quantity;
 
-    const productIds = dcRows.map((d) => d.productId);
-    const cardsByProductId = await cardsForProductIds(db, productIds);
-    const meta = await getCardMetaForProductIds(db, productIds);
-    const owned = await getOwnedByProductId(db, userId);
+    const cardNumbers = dcRows.map((d) => d.cardNumber);
+    const printingsByCardNumber = await getPrintingsByCardNumber(db, cardNumbers);
+    const meta = await getCardMetaForCardNumbers(db, cardNumbers);
+    const ownedByProduct = await getOwnedByProductId(db, userId);
+    const productIdToCardNumber = await getProductIdToCardNumberMap(db, Object.keys(ownedByProduct));
+    const ownedByCardNumber = aggregateOwnedByCardNumber(ownedByProduct, productIdToCardNumber);
 
     const validation = validateDeck(
-      dcRows.map((d) => ({
-        productId: d.productId,
-        cardNumber: meta.get(d.productId)?.cardNumber ?? d.productId,
-        quantity: d.quantity,
-      })),
+      dcRows.map((d) => ({ cardNumber: d.cardNumber, quantity: d.quantity })),
       deck.resourceDeckSize,
       meta,
-      new Map(Object.entries(owned)),
+      ownedByCardNumber,
     );
 
-    const cardsOut = dcRows
-      .map((d) => ({
-        productId: d.productId,
-        quantity: d.quantity,
-        owned: owned[d.productId] ?? 0,
-        allocated: allocMap[d.productId] ?? 0,
-        card: cardsByProductId.get(d.productId) ?? null,
-      }))
-      .sort((a, b) => cardSortKey(a.card).localeCompare(cardSortKey(b.card)));
+    const resolvedCards = await Promise.all(
+      dcRows.map(async (d) => {
+        const printings = printingsByCardNumber[d.cardNumber] ?? [d.cardNumber];
+        const allocatedByPrinting = printings
+          .filter((productId) => (allocMap[productId] ?? 0) > 0)
+          .map((productId) => ({ productId, qty: allocMap[productId] ?? 0 }));
+        const representativeProductId = printings[0] ?? d.cardNumber;
+        const cardRow = await db
+          .select()
+          .from(cards)
+          .where(eq(cards.productId, representativeProductId))
+          .get();
+        return {
+          cardNumber: d.cardNumber,
+          quantity: d.quantity,
+          owned: ownedByCardNumber.get(d.cardNumber) ?? 0,
+          allocated: sumAllocatedForCardNumber(d.cardNumber, printings, allocMap),
+          allocatedByPrinting,
+          card: cardRow ? serializeCard(cardRow) : null,
+        };
+      }),
+    );
+    resolvedCards.sort((a, b) => cardSortKey(a.card).localeCompare(cardSortKey(b.card)));
 
     return c.json({
       data: {
         ...deck,
-        cards: cardsOut,
+        cards: resolvedCards,
         validation,
-        complete: isComplete(
-          Object.fromEntries(dcRows.map((d) => [d.productId, d.quantity])),
+        complete: isDeckComplete(
+          Object.fromEntries(dcRows.map((d) => [d.cardNumber, d.quantity])),
           allocMap,
+          printingsByCardNumber,
         ),
       },
     });
@@ -149,7 +170,7 @@ export const decksRoutes = new Hono<AppEnv>()
     return c.json({ ok: true });
   })
 
-  // PUT /api/decks/:id/cards — set a specific printing quantity (0 removes)
+  // PUT /api/decks/:id/cards — set quantity for a card_number (0 removes)
   .put('/:id/cards', async (c) => {
     const db = getDb(c.env);
     const userId = c.get('userId')!;
@@ -157,59 +178,42 @@ export const decksRoutes = new Hono<AppEnv>()
     const owned = await getOwnedDeck(db, userId, id);
     if (!owned) return c.json({ error: 'Deck not found' }, 404);
 
-    const body = await readJson<{ productId: string; quantity: number }>(c);
-    const productId = (body.productId ?? '').trim();
-    if (!productId) return c.json({ error: 'productId required' }, 400);
+    const body = await readJson<{ cardNumber: string; productId?: string; quantity: number }>(c);
+    const cardNumber = (body.cardNumber ?? body.productId ?? '').trim();
+    if (!cardNumber) return c.json({ error: 'cardNumber required' }, 400);
     const quantity = clampInt(body.quantity ?? 0, 0, 99);
     const now = Math.floor(Date.now() / 1000);
 
     if (quantity <= 0) {
       await db
         .delete(deckCards)
-        .where(and(eq(deckCards.deckId, id), eq(deckCards.productId, productId)));
+        .where(and(eq(deckCards.deckId, id), eq(deckCards.cardNumber, cardNumber)));
       await db
         .update(decks)
         .set({ updatedAt: now })
         .where(and(eq(decks.id, id), eq(decks.userId, userId)));
-      return c.json({ productId, quantity: 0 });
+      return c.json({ cardNumber, quantity: 0 });
     }
     const card = await db
-      .select({ productId: cards.productId })
+      .select({ cardNumber: cards.cardNumber })
       .from(cards)
-      .where(eq(cards.productId, productId))
+      .where(eq(cards.cardNumber, cardNumber))
+      .orderBy(asc(cards.productId))
       .get();
-    if (!card) return c.json({ error: 'Card printing not found' }, 404);
+    if (!card) return c.json({ error: 'Card not found' }, 404);
     await db
       .insert(deckCards)
-      .values({ deckId: id, productId, quantity })
-      .onConflictDoUpdate({ target: [deckCards.deckId, deckCards.productId], set: { quantity } });
+      .values({ deckId: id, cardNumber, quantity })
+      .onConflictDoUpdate({ target: [deckCards.deckId, deckCards.cardNumber], set: { quantity } });
     await db
       .update(decks)
       .set({ updatedAt: now })
       .where(and(eq(decks.id, id), eq(decks.userId, userId)));
-    return c.json({ productId, quantity });
+    return c.json({ cardNumber, quantity });
   });
-
-function isComplete(required: Record<string, number>, alloc: Record<string, number>): boolean {
-  const keys = Object.keys(required);
-  if (keys.length === 0) return false;
-  return keys.every((cn) => (alloc[cn] ?? 0) >= required[cn]);
-}
 
 function clampInt(n: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, Math.floor(Number(n) || 0)));
-}
-
-async function cardsForProductIds(db: ReturnType<typeof getDb>, productIds: string[]) {
-  const map = new Map<string, ReturnType<typeof serializeCard>>();
-  if (productIds.length === 0) return map;
-  const rows = await db
-    .select()
-    .from(cards)
-    .where(inArray(cards.productId, productIds))
-    .all();
-  for (const r of rows) map.set(r.productId, serializeCard(r));
-  return map;
 }
 
 function cardSortKey(card: ReturnType<typeof serializeCard> | null): string {

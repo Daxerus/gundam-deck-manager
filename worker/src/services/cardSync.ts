@@ -50,6 +50,10 @@ export async function syncCards(db: DB, env: Env): Promise<SyncResult> {
   const version = await fetchManifestVersion(base);
   const rows = await fetchBulkCards(base);
 
+  if (rows.length === 0) {
+    throw new Error('Bulk download returned 0 cards — check gcg-api / GitHub redirect');
+  }
+
   let upserted = 0;
   for (let i = 0; i < rows.length; i += UPSERT_CHUNK) {
     const chunk = rows.slice(i, i + UPSERT_CHUNK);
@@ -57,8 +61,8 @@ export async function syncCards(db: DB, env: Env): Promise<SyncResult> {
     if (stmts.length > 0) {
       // drizzle d1 batch requires a non-empty tuple
       await db.batch(stmts as [(typeof stmts)[number], ...typeof stmts]);
-      upserted += stmts.length;
     }
+    upserted += stmts.length;
   }
 
   await db
@@ -85,22 +89,49 @@ async function fetchManifestVersion(base: string): Promise<string | null> {
 }
 
 async function fetchBulkCards(base: string): Promise<BulkCard[]> {
-  const res = await fetch(`${base}/v1/bulk`, { headers: browserHeaders() });
-  if (!res.ok) {
-    throw new Error(`Bulk download failed: HTTP ${res.status}`);
-  }
-  const text = await res.text();
-  const out: BulkCard[] = [];
-  for (const line of text.split('\n')) {
-    const trimmed = line.trim();
-    if (!trimmed) continue;
-    try {
-      out.push(JSON.parse(trimmed) as BulkCard);
-    } catch {
-      // skip malformed line
+  // Resolve redirect chain ourselves: api.gcgapi.com/v1/bulk → GitHub release → CDN.
+  // Some runtimes mishandle multi-hop redirects or return an HTML error body that
+  // parses to zero cards.
+  let url = `${base}/v1/bulk`;
+  for (let hop = 0; hop < 5; hop++) {
+    const res = await fetch(url, {
+      headers: browserHeaders(),
+      redirect: 'manual',
+    });
+
+    if (res.status >= 300 && res.status < 400) {
+      const loc = res.headers.get('Location');
+      if (!loc) throw new Error(`Bulk redirect ${res.status} without Location`);
+      url = new URL(loc, url).toString();
+      continue;
     }
+
+    if (!res.ok) {
+      const snippet = (await res.text()).slice(0, 120).replace(/\s+/g, ' ');
+      throw new Error(`Bulk download failed: HTTP ${res.status} from ${url} (${snippet})`);
+    }
+
+    const text = await res.text();
+    const out: BulkCard[] = [];
+    for (const line of text.split('\n')) {
+      const trimmed = line.trim();
+      if (!trimmed) continue;
+      try {
+        const row = JSON.parse(trimmed) as BulkCard;
+        if (row.product_id && row.card_number && row.name && row.set_code) {
+          out.push(row);
+        }
+      } catch {
+        // skip malformed line
+      }
+    }
+    if (out.length === 0) {
+      const snippet = text.slice(0, 160).replace(/\s+/g, ' ');
+      throw new Error(`Bulk body had no cards (url=${url}, snippet=${snippet})`);
+    }
+    return out;
   }
-  return out;
+  throw new Error('Bulk download exceeded redirect limit');
 }
 
 function upsertStmt(db: DB, r: BulkCard) {
@@ -135,7 +166,7 @@ function upsertStmt(db: DB, r: BulkCard) {
     traits: jsonOrNull(r.traits),
     linkRefs: jsonOrNull(r.link_refs),
   };
-  const { productId, ...rest } = values;
+  const { productId: _productId, ...rest } = values;
   return db.insert(cards).values(values).onConflictDoUpdate({ target: cards.productId, set: rest });
 }
 
@@ -154,8 +185,10 @@ function jsonOrNull(v: unknown): string | null {
 
 function browserHeaders(): HeadersInit {
   return {
-    'User-Agent': 'gundam-deck-manager/0.1 (+https://github.com)',
-    Accept: 'application/json, application/x-ndjson, text/plain',
+    // GitHub release CDN is picky about UA; a browser-like string avoids empty/HTML bodies.
+    'User-Agent':
+      'Mozilla/5.0 (compatible; gundam-deck-manager/0.1; +https://github.com) AppleWebKit/537.36',
+    Accept: 'application/json, application/x-ndjson, text/plain, */*',
   };
 }
 

@@ -3,30 +3,40 @@ import { motion } from 'framer-motion';
 import { HudButton, TerminalLog, type LogLine } from './hud';
 import type { ActivationPlan, PullPreference } from '../lib/types';
 
-function initialSources(plan: ActivationPlan): Record<string, number[]> {
-  const initial: Record<string, number[]> = {};
+type SourceKey = `${number}:${string}`;
+
+function sourceKey(deckId: number, productId: string): SourceKey {
+  return `${deckId}:${productId}`;
+}
+
+function initialSources(plan: ActivationPlan): Record<string, SourceKey[]> {
+  const initial: Record<string, SourceKey[]> = {};
   for (const option of plan.pullOptions) {
-    const selected: number[] = [];
+    const selected: SourceKey[] = [];
     for (const move of plan.moves) {
-      if (move.productId === option.productId && move.from !== 'box') {
-        for (let i = 0; i < move.qty; i += 1) selected.push(move.from.deckId);
-      }
+      if (move.from === 'box') continue;
+      const from = move.from;
+      const match = option.holders.find(
+        (holder) => holder.deckId === from.deckId && holder.productId === move.productId,
+      );
+      if (!match) continue;
+      for (let i = 0; i < move.qty; i += 1) selected.push(sourceKey(match.deckId, match.productId));
     }
     if (selected.length !== option.qty) {
       selected.length = 0;
       for (const holder of option.holders) {
         for (let i = 0; i < holder.qty && selected.length < option.qty; i += 1) {
-          selected.push(holder.deckId);
+          selected.push(sourceKey(holder.deckId, holder.productId));
         }
       }
     }
-    initial[option.productId] = selected;
+    initial[option.cardNumber] = selected;
   }
   return initial;
 }
 
 export function planToLog(plan: ActivationPlan): LogLine[] {
-  const configurableProducts = new Set(plan.pullOptions.map((option) => option.productId));
+  const configurableCards = new Set(plan.pullOptions.map((option) => option.cardNumber));
   const lines: LogLine[] = [
     { text: `SECUENCIA DE MONTAJE // ${plan.targetName}`, tone: 'hud' },
   ];
@@ -34,10 +44,18 @@ export function planToLog(plan: ActivationPlan): LogLine[] {
     lines.push({ text: 'modo sin colección — solo decks accesibles', tone: 'amber' });
   }
   if (plan.moves.length === 0 && plan.pullOptions.length === 0) {
-    lines.push({ text: 'sin movimientos necesarios — deck ya ensamblado', tone: 'muted' });
+    lines.push({
+      text: plan.shortages.length
+        ? 'sin movimientos posibles — faltan copias'
+        : 'sin movimientos necesarios — deck ya ensamblado',
+      tone: plan.shortages.length ? 'amber' : 'muted',
+    });
   }
   for (const m of plan.moves) {
-    if (m.from !== 'box' && configurableProducts.has(m.productId)) continue;
+    const cardNumber = plan.pullOptions.find((option) =>
+      option.holders.some((holder) => holder.productId === m.productId),
+    )?.cardNumber;
+    if (m.from !== 'box' && cardNumber && configurableCards.has(cardNumber)) continue;
     if (m.from === 'box') {
       lines.push({ text: `RETIRAR ${m.qty}x ${m.name} ← COLECCION`, tone: 'ok' });
     } else {
@@ -48,7 +66,6 @@ export function planToLog(plan: ActivationPlan): LogLine[] {
     lines.push({ text: `ELEGIR ORIGEN DE ${option.qty}x ${option.name}`, tone: 'amber' });
   }
   for (const a of plan.affectedDecks) {
-    if (a.pulled.every((pull) => configurableProducts.has(pull.productId))) continue;
     lines.push({ text: `⚠ [Deck ${a.name}] queda INCOMPLETO y se desactiva`, tone: 'amber' });
   }
   for (const s of plan.shortages) {
@@ -63,7 +80,7 @@ export function planToLog(plan: ActivationPlan): LogLine[] {
         tone: 'alert',
       });
     } else {
-      lines.push({ text: `✖ FALTAN ${s.missing}x ${s.name} — a lista de compra`, tone: 'alert' });
+      lines.push({ text: `✖ FALTAN ${s.missing}x ${s.name} (${s.cardNumber})`, tone: 'alert' });
     }
   }
   lines.push(
@@ -90,7 +107,7 @@ export function MovePlanDialog({
   const lines = useMemo(() => planToLog(plan), [plan]);
   const [revealed, setRevealed] = useState(false);
   const [toggling, setToggling] = useState(false);
-  const [sources, setSources] = useState<Record<string, number[]>>(() => initialSources(plan));
+  const [sources, setSources] = useState<Record<string, SourceKey[]>>(() => initialSources(plan));
 
   useEffect(() => {
     setSources(initialSources(plan));
@@ -100,23 +117,26 @@ export function MovePlanDialog({
   const preferences = useMemo<PullPreference[]>(
     () =>
       plan.pullOptions.map((option) => {
-        const counts = new Map<number, number>();
-        for (const deckId of sources[option.productId] ?? []) {
-          counts.set(deckId, (counts.get(deckId) ?? 0) + 1);
+        const counts = new Map<SourceKey, number>();
+        for (const key of sources[option.cardNumber] ?? []) {
+          counts.set(key, (counts.get(key) ?? 0) + 1);
         }
         return {
-          productId: option.productId,
-          pulls: [...counts].map(([deckId, qty]) => ({ deckId, qty })),
+          cardNumber: option.cardNumber,
+          pulls: [...counts].map(([key, qty]) => {
+            const [deckId, productId] = key.split(':');
+            return { deckId: Number(deckId), productId, qty };
+          }),
         };
       }),
     [plan.pullOptions, sources],
   );
 
-  function selectSource(productId: string, copyIndex: number, deckId: number) {
+  function selectSource(cardNumber: string, copyIndex: number, key: SourceKey) {
     setSources((current) => ({
       ...current,
-      [productId]: (current[productId] ?? []).map((value, index) =>
-        index === copyIndex ? deckId : value,
+      [cardNumber]: (current[cardNumber] ?? []).map((value, index) =>
+        index === copyIndex ? key : value,
       ),
     }));
   }
@@ -166,17 +186,20 @@ export function MovePlanDialog({
         {plan.pullOptions.length > 0 && (
           <div className="mt-4 space-y-3">
             <p className="font-display text-[11px] uppercase tracking-[0.16em] text-amber">
-              // Elige el deck de origen por carta
+              // Elige el deck de origen por identidad
             </p>
             {plan.pullOptions.map((option) => {
-              const selected = sources[option.productId] ?? [];
-              const selectedCounts = new Map<number, number>();
-              for (const deckId of selected) {
-                selectedCounts.set(deckId, (selectedCounts.get(deckId) ?? 0) + 1);
+              const selected = sources[option.cardNumber] ?? [];
+              const selectedCounts = new Map<SourceKey, number>();
+              for (const key of selected) {
+                selectedCounts.set(key, (selectedCounts.get(key) ?? 0) + 1);
               }
               return (
-                <div key={option.productId} className="border border-amber/30 bg-void/40 p-3">
-                  <p className="font-mono text-[12px] text-ink">{option.name}</p>
+                <div key={option.cardNumber} className="border border-amber/30 bg-void/40 p-3">
+                  <p className="font-mono text-[12px] text-ink">
+                    {option.name}{' '}
+                    <span className="text-muted">({option.cardNumber})</span>
+                  </p>
                   <p className="mb-2 font-mono text-[10px] text-muted">
                     {plan.allowBox
                       ? `La colección aporta el máximo disponible. Elige de dónde sacar las ${option.qty} ${option.qty === 1 ? 'copia restante' : 'copias restantes'}.`
@@ -194,19 +217,18 @@ export function MovePlanDialog({
                           value={selected[copyIndex] ?? ''}
                           disabled={locked}
                           onChange={(event) =>
-                            selectSource(option.productId, copyIndex, Number(event.target.value))
+                            selectSource(option.cardNumber, copyIndex, event.target.value as SourceKey)
                           }
                         >
                           {option.holders.map((holder) => {
-                            const used = selectedCounts.get(holder.deckId) ?? 0;
-                            const isCurrent = selected[copyIndex] === holder.deckId;
+                            const key = sourceKey(holder.deckId, holder.productId);
+                            const used = selectedCounts.get(key) ?? 0;
+                            const isCurrent = selected[copyIndex] === key;
+                            const printing =
+                              holder.productId !== option.cardNumber ? ` · ${holder.productId}` : '';
                             return (
-                              <option
-                                key={holder.deckId}
-                                value={holder.deckId}
-                                disabled={!isCurrent && used >= holder.qty}
-                              >
-                                Deck {holder.name} ({holder.qty} disp.)
+                              <option key={key} value={key} disabled={!isCurrent && used >= holder.qty}>
+                                Deck {holder.name} ({holder.qty} disp.{printing})
                                 {holder.isActive ? ' · activo' : ''}
                               </option>
                             );
@@ -218,16 +240,18 @@ export function MovePlanDialog({
                   <p className="mt-2 font-mono text-[10px] text-amber">
                     Se extraerá:{' '}
                     {option.holders
-                      .filter((holder) => (selectedCounts.get(holder.deckId) ?? 0) > 0)
-                      .map(
-                        (holder) =>
-                          `Deck ${holder.name} ×${selectedCounts.get(holder.deckId)}`,
-                      )
+                      .map((holder) => {
+                        const key = sourceKey(holder.deckId, holder.productId);
+                        const count = selectedCounts.get(key) ?? 0;
+                        if (count <= 0) return null;
+                        return `Deck ${holder.name} ×${count}`;
+                      })
+                      .filter(Boolean)
                       .join(' · ')}
                   </p>
                   {option.holders.some(
                     (holder) =>
-                      holder.isActive && (selectedCounts.get(holder.deckId) ?? 0) > 0,
+                      holder.isActive && (selectedCounts.get(sourceKey(holder.deckId, holder.productId)) ?? 0) > 0,
                   ) && (
                     <p className="mt-1 font-mono text-[10px] text-alert">
                       Los decks activos seleccionados quedarán incompletos y se desactivarán.

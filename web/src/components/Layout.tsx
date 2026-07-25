@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react';
 import { NavLink, Outlet } from 'react-router-dom';
 import { useAuth } from '../lib/auth';
-import { useStatus } from '../lib/queries';
+import { useStatus, useSyncCatalog } from '../lib/queries';
+import { ApiError } from '../lib/api';
 
 const NAV = [
   { to: '/', label: 'Catálogo', end: true },
@@ -14,7 +15,19 @@ const NAV = [
 export function Layout() {
   const { logout, user } = useAuth();
   const status = useStatus();
+  const sync = useSyncCatalog();
   const clock = useClock();
+  const [syncMsg, setSyncMsg] = useState<string | null>(null);
+
+  async function runSync() {
+    setSyncMsg(null);
+    try {
+      const res = await sync.mutateAsync();
+      setSyncMsg(`Sync OK · ${res.cardCount} cartas`);
+    } catch (err) {
+      setSyncMsg(err instanceof ApiError ? err.message : 'Sync falló');
+    }
+  }
 
   return (
     <div className="scanlines flex min-h-full flex-col">
@@ -57,6 +70,17 @@ export function Layout() {
             <span className="hidden sm:inline">
               CARDS <span className="text-hud">{status.data?.cardCount ?? '----'}</span>
             </span>
+            {user?.isAdmin && (
+              <button
+                type="button"
+                onClick={() => void runSync()}
+                disabled={sync.isPending}
+                className="border border-hud/40 px-2 py-0.5 uppercase tracking-[0.16em] text-hud hover:bg-hud/10 disabled:opacity-40"
+                title="Descargar catálogo desde gcg-api"
+              >
+                {sync.isPending ? 'Sync…' : 'Sync'}
+              </button>
+            )}
             <span className="tabular-nums text-ink">{clock}</span>
             <span className="flex items-center gap-1 text-ok">
               <span className="h-1.5 w-1.5 animate-blink rounded-full bg-ok" /> LINK
@@ -69,6 +93,11 @@ export function Layout() {
             </button>
           </div>
         </div>
+        {syncMsg && (
+          <div className="border-t border-line/40 px-4 py-1 text-center font-mono text-[10px] text-hud">
+            {syncMsg}
+          </div>
+        )}
       </header>
 
       <main className="mx-auto w-full max-w-7xl flex-1 px-4 py-6">

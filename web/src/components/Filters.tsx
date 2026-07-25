@@ -25,10 +25,10 @@ export function Filters({
 
   return (
     <div className="flex flex-wrap items-end gap-3">
-      <Field label="Buscar">
+      <Field label="Nombre o número">
         <input
-          className="hud-input w-48"
-          placeholder="nombre…"
+          className="hud-input w-56"
+          placeholder="nombre o GD05-001…"
           value={filters.name ?? ''}
           onChange={(e) => set({ name: e.target.value })}
         />

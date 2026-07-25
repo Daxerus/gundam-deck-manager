@@ -23,6 +23,8 @@ export interface Card {
   whereToGet: string | null;
   keywordEffects: { keyword: string; value?: number }[] | null;
   traits: string[] | null;
+  /** Other physical printings of the same card_number (catalog grouped view). */
+  variants?: Card[];
 }
 
 export interface SetInfo {
@@ -55,7 +57,6 @@ export interface DeckSummary {
 }
 
 export interface ShoppingShortage {
-  productId: string;
   cardNumber: string;
   name: string;
   required: number;
@@ -73,10 +74,11 @@ export interface DeckValidation {
 }
 
 export interface DeckCardEntry {
-  productId: string;
+  cardNumber: string;
   quantity: number;
   owned: number;
   allocated: number;
+  allocatedByPrinting?: { productId: string; qty: number }[];
   card: Card | null;
 }
 
@@ -109,7 +111,7 @@ export interface AffectedDeck {
 }
 
 export interface PlanShortage {
-  productId: string;
+  cardNumber: string;
   name: string;
   required: number;
   owned: number;
@@ -117,17 +119,18 @@ export interface PlanShortage {
 }
 
 export interface PullPreference {
-  productId: string;
-  pulls: { deckId: number; qty: number }[];
+  cardNumber: string;
+  pulls: { deckId: number; productId: string; qty: number }[];
 }
 
 export interface PullOption {
-  productId: string;
+  cardNumber: string;
   name: string;
   qty: number;
   holders: {
     deckId: number;
     name: string;
+    productId: string;
     qty: number;
     isActive: boolean;
   }[];

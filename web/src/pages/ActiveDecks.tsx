@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { motion } from 'framer-motion';
 import { Panel, HudButton, StatusBadge } from '../components/hud';
 import { CardImage } from '../components/CardTile';
@@ -8,9 +8,10 @@ import {
   useActivationPlan,
   useDeactivate,
   useDecks,
-  useLocations,
+  useInfiniteLocations,
   useSetLocation,
 } from '../lib/queries';
+import { useLoadMoreOnScroll } from '../lib/useLoadMoreOnScroll';
 import { MAIN_DECK_SIZE } from '../lib/rules';
 import type {
   ActivationPlan,
@@ -18,6 +19,8 @@ import type {
   DeckSummary,
   PullPreference,
 } from '../lib/types';
+
+const LOCATIONS_PAGE = 60;
 
 export function ActiveDecks() {
   const decks = useDecks();
@@ -110,32 +113,40 @@ export function ActiveDecks() {
 }
 
 function LocationsPanel({ decks }: { decks: DeckSummary[] }) {
-  const loc = useLocations();
-  const allRows = (loc.data ?? []).filter((r) => r.owned > 0);
   const [query, setQuery] = useState('');
+  const [debouncedQuery, setDebouncedQuery] = useState('');
   const [editing, setEditing] = useState<CardLocation | null>(null);
   const [preview, setPreview] = useState<CardLocation | null>(null);
+  const scrollRef = useRef<HTMLDivElement | null>(null);
 
-  const q = query.trim().toLowerCase();
-  const rows = q
-    ? allRows.filter(
-        (r) =>
-          r.name.toLowerCase().includes(q) ||
-          r.cardNumber.toLowerCase().includes(q) ||
-          r.productId.toLowerCase().includes(q) ||
-          r.decks.some((d) => d.name.toLowerCase().includes(q)),
-      )
-    : allRows;
+  useEffect(() => {
+    const handle = window.setTimeout(() => setDebouncedQuery(query.trim()), 250);
+    return () => window.clearTimeout(handle);
+  }, [query]);
+
+  const loc = useInfiniteLocations(debouncedQuery, LOCATIONS_PAGE);
+  const rows = loc.data?.pages.flatMap((page) => page.data) ?? [];
+  const total = loc.data?.pages[0]?._meta.total ?? 0;
+  const loadMoreRef = useLoadMoreOnScroll({
+    hasNextPage: !!loc.hasNextPage,
+    isFetchingNextPage: loc.isFetchingNextPage,
+    fetchNextPage: loc.fetchNextPage,
+    rootRef: scrollRef,
+  });
 
   const subtitle =
-    q && rows.length !== allRows.length
-      ? `${rows.length} de ${allRows.length} cartas`
-      : `${allRows.length} cartas en colección`;
+    total > 0
+      ? `${rows.length} / ${total} impresiones`
+      : loc.isLoading
+        ? '…'
+        : '0 impresiones';
 
   return (
     <Panel title="Card Tracking // Ubicación física" subtitle={subtitle}>
-      {allRows.length === 0 ? (
-        <p className="font-ui text-muted">Aún no tienes copias registradas.</p>
+      {loc.isError ? (
+        <p className="font-ui text-alert">
+          Error al cargar ubicaciones. Recarga la página o vuelve a sincronizar sesión.
+        </p>
       ) : (
         <div className="relative space-y-3">
           <input
@@ -148,24 +159,30 @@ function LocationsPanel({ decks }: { decks: DeckSummary[] }) {
             }}
             autoComplete="off"
           />
-          <div className="relative">
-            <div className="pointer-events-none absolute right-0 top-0 z-[40] w-44 sm:w-52">
-              {preview && (
-                <div key={preview.productId} className="animate-card-preview-in border border-hud/50 bg-void p-1 shadow-hud-strong">
-                  <div className="aspect-[5/7] w-full overflow-hidden">
-                    <CardImage card={preview} width={500} />
+          {loc.isLoading && rows.length === 0 ? (
+            <p className="font-ui text-muted">Cargando ubicaciones…</p>
+          ) : total === 0 ? (
+            <p className="font-ui text-muted">
+              {debouncedQuery
+                ? `Ninguna carta coincide con “${debouncedQuery}”.`
+                : 'Aún no tienes copias registradas.'}
+            </p>
+          ) : (
+            <div className="relative">
+              <div className="pointer-events-none absolute right-0 top-0 z-[40] w-44 sm:w-52">
+                {preview && (
+                  <div key={preview.productId} className="animate-card-preview-in border border-hud/50 bg-void p-1 shadow-hud-strong">
+                    <div className="aspect-[5/7] w-full overflow-hidden">
+                      <CardImage card={preview} width={500} />
+                    </div>
+                    <div className="px-1 py-1 font-mono text-[10px] text-muted">
+                      {preview.cardNumber}
+                      {preview.productId !== preview.cardNumber ? ` · ${preview.productId}` : ''}
+                    </div>
                   </div>
-                  <div className="px-1 py-1 font-mono text-[10px] text-muted">
-                    {preview.cardNumber}
-                    {preview.productId !== preview.cardNumber ? ` · ${preview.productId}` : ''}
-                  </div>
-                </div>
-              )}
-            </div>
-            {rows.length === 0 ? (
-              <p className="font-ui text-muted">Ninguna carta coincide con “{query.trim()}”.</p>
-            ) : (
-              <div className="overflow-auto">
+                )}
+              </div>
+              <div ref={scrollRef} className="max-h-[520px] overflow-auto">
                 <table className="w-full min-w-[760px] table-fixed font-mono text-[12px]">
                   <colgroup>
                     <col className="w-[28%]" />
@@ -218,9 +235,15 @@ function LocationsPanel({ decks }: { decks: DeckSummary[] }) {
                     ))}
                   </tbody>
                 </table>
+                <div ref={loadMoreRef} className="h-1" />
               </div>
-            )}
-          </div>
+              <p className="mt-2 font-mono text-[10px] text-muted">
+                {loc.isFetchingNextPage
+                  ? 'Cargando más…'
+                  : `${rows.length} / ${total}`}
+              </p>
+            </div>
+          )}
         </div>
       )}
 

@@ -9,8 +9,20 @@ export const cardsRoutes = new Hono<AppEnv>()
   .get('/cards', async (c) => {
     const db = getDb(c.env);
     const q = c.req.query();
+    const groupVariants = q.group_variants === '1' || q.group_variants === 'true';
 
     const conds = [];
+    if (groupVariants) {
+      // One catalog tile per playable card identity. The selected row is the
+      // base product_id when present, otherwise the first available printing.
+      conds.push(
+        sql`${cards.productId} = (
+          select min(c2.product_id)
+          from cards c2
+          where c2.card_number = ${cards.cardNumber}
+        )`,
+      );
+    }
     if (q.set_code) conds.push(eq(sql`lower(${cards.setCode})`, q.set_code.toLowerCase()));
     if (q.card_type) conds.push(eq(sql`lower(${cards.cardType})`, q.card_type.toLowerCase()));
     if (q.exclude_card_type) {
@@ -19,19 +31,41 @@ export const cardsRoutes = new Hono<AppEnv>()
     }
     if (q.color) conds.push(eq(cards.color, q.color));
     if (q.rarity) conds.push(eq(cards.rarity, q.rarity));
-    if (q.name) conds.push(like(sql`lower(${cards.name})`, `%${q.name.toLowerCase()}%`));
+    if (q.name) {
+      const search = `%${q.name.trim().toLowerCase()}%`;
+      conds.push(
+        or(
+          like(sql`lower(${cards.name})`, search),
+          like(sql`lower(${cards.cardNumber})`, search),
+        )!,
+      );
+    }
     if (q.effect) conds.push(like(sql`lower(${cards.effect})`, `%${q.effect.toLowerCase()}%`));
     if (q.owned_only === '1' || q.owned_only === 'true') {
       const userId = c.get('userId')!;
-      conds.push(
-        inArray(
-          cards.productId,
-          db
-            .select({ id: collectionItems.productId })
-            .from(collectionItems)
-            .where(and(eq(collectionItems.userId, userId), gt(collectionItems.quantity, 0))),
-        ),
-      );
+      if (groupVariants) {
+        // Include the card identity if ANY printing is owned.
+        conds.push(
+          sql`exists (
+            select 1
+            from collection_items ci
+            inner join cards owned_card on owned_card.product_id = ci.product_id
+            where ci.user_id = ${userId}
+              and ci.quantity > 0
+              and owned_card.card_number = ${cards.cardNumber}
+          )`,
+        );
+      } else {
+        conds.push(
+          inArray(
+            cards.productId,
+            db
+              .select({ id: collectionItems.productId })
+              .from(collectionItems)
+              .where(and(eq(collectionItems.userId, userId), gt(collectionItems.quantity, 0))),
+          ),
+        );
+      }
     }
     for (const [key, col] of [
       ['level', cards.level],
@@ -61,9 +95,30 @@ export const cardsRoutes = new Hono<AppEnv>()
       .offset(offset)
       .all();
 
+    const variantsByNumber = new Map<string, CardRow[]>();
+    if (groupVariants && rows.length > 0) {
+      const cardNumbers = [...new Set(rows.map((row) => row.cardNumber))];
+      const variantRows = await db
+        .select()
+        .from(cards)
+        .where(inArray(cards.cardNumber, cardNumbers))
+        .orderBy(asc(cards.cardNumber), asc(cards.productId))
+        .all();
+      for (const row of variantRows) {
+        const variants = variantsByNumber.get(row.cardNumber) ?? [];
+        variants.push(row);
+        variantsByNumber.set(row.cardNumber, variants);
+      }
+    }
+
     return c.json({
       _meta: { total, limit, offset, count: rows.length },
-      data: rows.map(serializeCard),
+      data: rows.map((row) => ({
+        ...serializeCard(row),
+        ...(groupVariants
+          ? { variants: (variantsByNumber.get(row.cardNumber) ?? [row]).map(serializeCard) }
+          : {}),
+      })),
     });
   })
 

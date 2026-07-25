@@ -102,7 +102,7 @@ export const decks = sqliteTable(
   }),
 );
 
-/** Desired composition of a deck, keyed by product_id (a specific printing). */
+/** Desired composition of a deck, keyed by card_number (playable identity). */
 export const deckCards = sqliteTable(
   'deck_cards',
   {
@@ -110,11 +110,11 @@ export const deckCards = sqliteTable(
     deckId: integer('deck_id')
       .notNull()
       .references(() => decks.id, { onDelete: 'cascade' }),
-    productId: text('product_id').notNull(),
+    cardNumber: text('card_number').notNull(),
     quantity: integer('quantity').notNull().default(1),
   },
   (t) => ({
-    uniq: uniqueIndex('uniq_deck_card').on(t.deckId, t.productId),
+    uniq: uniqueIndex('uniq_deck_card').on(t.deckId, t.cardNumber),
     byDeck: index('idx_deck_cards_deck').on(t.deckId),
   }),
 );

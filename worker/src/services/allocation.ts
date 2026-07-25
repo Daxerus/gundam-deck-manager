@@ -1,14 +1,9 @@
 /**
  * Physical-copy allocation / "active deck swap" engine.
  *
- * Copies are tracked per product_id (specific printing). A deck's `alloc` is the copies
- * physically placed in it. Free copies in the box = owned(productId) - sum(alloc).
- *
- * Activating a deck fills its allocation to its required composition, taking copies from the
- * box first (unless `allowBox` is false) and then pulling from OTHER decks (which become
- * incomplete and are deactivated). Copies that simply are not owned become purchase "shortages".
- *
- * The `computeActivationPlan` function is pure so it can be unit-tested without D1.
+ * Deck composition (`required`) is keyed by card_number; physical copies (`alloc`, `owned`)
+ * remain keyed by product_id. Activating a deck assigns concrete printings to satisfy each
+ * card_number requirement, taking from the box first and then other decks.
  */
 
 export interface DeckState {
@@ -16,7 +11,7 @@ export interface DeckState {
   name: string;
   isActive: boolean;
   updatedAt: number;
-  /** product_id -> desired quantity */
+  /** card_number -> desired quantity */
   required: Record<string, number>;
   /** product_id -> currently allocated quantity */
   alloc: Record<string, number>;
@@ -26,12 +21,14 @@ export interface EngineInput {
   targetId: number;
   /** product_id -> owned copies of that printing */
   owned: Record<string, number>;
+  /** card_number -> product_ids (sorted ascending, base printing first) */
+  printingsByCardNumber: Record<string, string[]>;
   decks: DeckState[];
 }
 
 export interface PullPreference {
-  productId: string;
-  pulls: { deckId: number; qty: number }[];
+  cardNumber: string;
+  pulls: { deckId: number; productId: string; qty: number }[];
 }
 
 export interface ActivationOptions {
@@ -41,12 +38,13 @@ export interface ActivationOptions {
 }
 
 export interface PullOption {
-  productId: string;
+  cardNumber: string;
   /** Copies that must be pulled from decks after using all free box copies. */
   qty: number;
   holders: {
     deckId: number;
     name: string;
+    productId: string;
     qty: number;
     isActive: boolean;
   }[];
@@ -68,7 +66,7 @@ export interface AffectedDeck {
 }
 
 export interface Shortage {
-  productId: string;
+  cardNumber: string;
   required: number;
   owned: number;
   missing: number;
@@ -80,14 +78,70 @@ export interface ActivationPlan {
   moves: Move[];
   affectedDecks: AffectedDeck[];
   shortages: Shortage[];
-  /** Cards whose required deck pulls can be distributed between alternative sources. */
   pullOptions: PullOption[];
-  /** Whether free box copies were considered for this plan. */
   allowBox: boolean;
-  /** true if the deck can be fully assembled from owned copies */
   complete: boolean;
   /** final allocation the target deck will hold: product_id -> qty */
   targetAllocation: Record<string, number>;
+}
+
+interface PullSource {
+  holder: DeckState;
+  productId: string;
+  qty: number;
+}
+
+export function sumOwnedForCardNumber(
+  cardNumber: string,
+  printings: string[],
+  owned: Record<string, number>,
+): number {
+  return printings.reduce((sum, productId) => sum + (owned[productId] ?? 0), 0);
+}
+
+export function sumAllocatedForCardNumber(
+  cardNumber: string,
+  printings: string[],
+  alloc: Record<string, number>,
+): number {
+  return printings.reduce((sum, productId) => sum + (alloc[productId] ?? 0), 0);
+}
+
+function sortPrintingsForBox(
+  printings: string[],
+  targetAlloc: Record<string, number>,
+  boxFree: Record<string, number>,
+): string[] {
+  return [...printings].sort((a, b) => {
+    const inTargetA = (targetAlloc[a] ?? 0) > 0 ? 0 : 1;
+    const inTargetB = (targetAlloc[b] ?? 0) > 0 ? 0 : 1;
+    if (inTargetA !== inTargetB) return inTargetA - inTargetB;
+    if (a !== b) return a.localeCompare(b);
+    return (boxFree[b] ?? 0) - (boxFree[a] ?? 0);
+  });
+}
+
+function addToMap(map: Record<string, number>, key: string, qty: number) {
+  if (qty <= 0) return;
+  map[key] = (map[key] ?? 0) + qty;
+}
+
+function recordPull(
+  affected: Map<number, AffectedDeck>,
+  holder: DeckState,
+  productId: string,
+  qty: number,
+  moves: Move[],
+) {
+  moves.push({ productId, from: { deckId: holder.deckId, name: holder.name }, qty });
+  const rec = affected.get(holder.deckId) ?? {
+    deckId: holder.deckId,
+    name: holder.name,
+    wasActive: holder.isActive,
+    pulled: [],
+  };
+  rec.pulled.push({ productId, qty });
+  affected.set(holder.deckId, rec);
 }
 
 export function computeActivationPlan(
@@ -95,138 +149,147 @@ export function computeActivationPlan(
   options: ActivationOptions = {},
 ): ActivationPlan {
   const { preferences = [], allowBox = true } = options;
-  const { targetId, owned, decks } = input;
+  const { targetId, owned, printingsByCardNumber, decks } = input;
   const target = decks.find((d) => d.deckId === targetId);
   if (!target) throw new Error(`Target deck ${targetId} not found`);
   const others = decks.filter((d) => d.deckId !== targetId);
-  const preferenceByProduct = new Map<string, PullPreference>();
+  const preferenceByCard = new Map<string, PullPreference>();
   for (const preference of preferences) {
-    if (preferenceByProduct.has(preference.productId)) {
-      throw new Error(`Duplicate source preference for ${preference.productId}`);
+    if (preferenceByCard.has(preference.cardNumber)) {
+      throw new Error(`Duplicate source preference for ${preference.cardNumber}`);
     }
-    preferenceByProduct.set(preference.productId, preference);
+    preferenceByCard.set(preference.cardNumber, preference);
   }
   const usedPreferences = new Set<string>();
 
-  // Total copies of each printing currently allocated across ALL decks.
   const allocatedTotal: Record<string, number> = {};
   for (const d of decks) {
-    for (const [cn, q] of Object.entries(d.alloc)) {
-      allocatedTotal[cn] = (allocatedTotal[cn] ?? 0) + q;
+    for (const [productId, q] of Object.entries(d.alloc)) {
+      allocatedTotal[productId] = (allocatedTotal[productId] ?? 0) + q;
     }
   }
 
   const moves: Move[] = [];
   const shortages: Shortage[] = [];
   const pullOptions: PullOption[] = [];
-  const targetAllocation: Record<string, number> = {};
+  const targetAllocation: Record<string, number> = { ...target.alloc };
   const affected = new Map<number, AffectedDeck>();
 
-  // Mutable working copies of other decks' allocations (so we don't pull the same copy twice).
   const otherAlloc = new Map<number, Record<string, number>>();
   for (const d of others) otherAlloc.set(d.deckId, { ...d.alloc });
 
-  for (const [productId, reqRaw] of Object.entries(target.required)) {
-    const req = reqRaw;
-    const ownedCopies = owned[productId] ?? 0;
-    const cur = target.alloc[productId] ?? 0;
-    const boxFree = ownedCopies - (allocatedTotal[productId] ?? 0); // copies in no deck at all
-
-    // Keep what the target already holds; optionally take additional copies from the box first.
-    const takeBox = allowBox
-      ? Math.max(0, Math.min(req - cur, Math.max(0, boxFree)))
-      : 0;
-    if (takeBox > 0) moves.push({ productId, from: 'box', qty: takeBox });
-    let got = cur + takeBox;
+  for (const [cardNumber, req] of Object.entries(target.required)) {
+    const printings = printingsByCardNumber[cardNumber] ?? [cardNumber];
+    const ownedTotal = sumOwnedForCardNumber(cardNumber, printings, owned);
+    let got = sumAllocatedForCardNumber(cardNumber, printings, targetAllocation);
     let remaining = req - got;
 
-    if (remaining > 0) {
-      // Pull from other decks holding this card: inactive decks first, then oldest active.
-      const holders = others
-        .filter((d) => (otherAlloc.get(d.deckId)?.[productId] ?? 0) > 0)
-        .sort((a, b) => Number(a.isActive) - Number(b.isActive) || a.updatedAt - b.updatedAt);
+    if (remaining > 0 && allowBox) {
+      const boxFree: Record<string, number> = {};
+      for (const productId of printings) {
+        boxFree[productId] = Math.max(0, (owned[productId] ?? 0) - (allocatedTotal[productId] ?? 0));
+      }
+      for (const productId of sortPrintingsForBox(printings, targetAllocation, boxFree)) {
+        if (remaining <= 0) break;
+        const take = Math.min(remaining, boxFree[productId] ?? 0);
+        if (take <= 0) continue;
+        moves.push({ productId, from: 'box', qty: take });
+        addToMap(targetAllocation, productId, take);
+        allocatedTotal[productId] = (allocatedTotal[productId] ?? 0) + take;
+        got += take;
+        remaining -= take;
+      }
+    }
 
-      const totalAvailable = holders.reduce(
-        (sum, holder) => sum + (otherAlloc.get(holder.deckId)?.[productId] ?? 0),
-        0,
+    if (remaining > 0) {
+      const sources: PullSource[] = [];
+      for (const holder of others) {
+        const hAlloc = otherAlloc.get(holder.deckId)!;
+        for (const productId of printings) {
+          const qty = hAlloc[productId] ?? 0;
+          if (qty > 0) sources.push({ holder, productId, qty });
+        }
+      }
+      sources.sort(
+        (a, b) =>
+          Number(a.holder.isActive) - Number(b.holder.isActive) ||
+          a.holder.updatedAt - b.holder.updatedAt ||
+          a.holder.deckId - b.holder.deckId ||
+          a.productId.localeCompare(b.productId),
       );
+
+      const totalAvailable = sources.reduce((sum, source) => sum + source.qty, 0);
       const pullQty = Math.min(remaining, totalAvailable);
-      if (pullQty > 0 && holders.length > 1 && totalAvailable > pullQty) {
+      if (pullQty > 0 && sources.length > 1 && totalAvailable > pullQty) {
         pullOptions.push({
-          productId,
+          cardNumber,
           qty: pullQty,
-          holders: holders.map((holder) => ({
-            deckId: holder.deckId,
-            name: holder.name,
-            qty: otherAlloc.get(holder.deckId)?.[productId] ?? 0,
-            isActive: holder.isActive,
+          holders: sources.map((source) => ({
+            deckId: source.holder.deckId,
+            name: source.holder.name,
+            productId: source.productId,
+            qty: source.qty,
+            isActive: source.holder.isActive,
           })),
         });
       }
 
-      const preference = preferenceByProduct.get(productId);
-      let selectedHolders = holders.map((holder) => ({
-        holder,
-        qty: otherAlloc.get(holder.deckId)?.[productId] ?? 0,
-      }));
+      const preference = preferenceByCard.get(cardNumber);
+      let selectedSources = sources.map((source) => ({ source, qty: source.qty }));
       if (preference) {
-        usedPreferences.add(productId);
-        const seenDecks = new Set<number>();
+        usedPreferences.add(cardNumber);
+        const seen = new Set<string>();
         let selectedTotal = 0;
-        selectedHolders = preference.pulls.map((selected) => {
+        selectedSources = preference.pulls.map((selected) => {
+          const key = `${selected.deckId}:${selected.productId}`;
           if (
             !Number.isInteger(selected.deckId) ||
+            !selected.productId ||
             !Number.isInteger(selected.qty) ||
             selected.qty < 0 ||
-            seenDecks.has(selected.deckId)
+            seen.has(key)
           ) {
-            throw new Error(`Invalid source preference for ${productId}`);
+            throw new Error(`Invalid source preference for ${cardNumber}`);
           }
-          seenDecks.add(selected.deckId);
-          const holder = holders.find((candidate) => candidate.deckId === selected.deckId);
-          const available = holder ? (otherAlloc.get(holder.deckId)?.[productId] ?? 0) : 0;
-          if (!holder || selected.qty > available) {
-            throw new Error(`Source preference for ${productId} exceeds available copies`);
+          seen.add(key);
+          const match = sources.find(
+            (source) =>
+              source.holder.deckId === selected.deckId && source.productId === selected.productId,
+          );
+          if (!match || selected.qty > match.qty) {
+            throw new Error(`Source preference for ${cardNumber} exceeds available copies`);
           }
           selectedTotal += selected.qty;
-          return { holder, qty: selected.qty };
+          return { source: match, qty: selected.qty };
         });
         if (selectedTotal !== pullQty) {
-          throw new Error(`Source preference for ${productId} must allocate ${pullQty} copies`);
+          throw new Error(`Source preference for ${cardNumber} must allocate ${pullQty} copies`);
         }
       }
 
-      for (const selected of selectedHolders) {
+      for (const selected of selectedSources) {
         if (remaining <= 0) break;
-        const h = selected.holder;
-        const hAlloc = otherAlloc.get(h.deckId)!;
-        const avail = hAlloc[productId] ?? 0;
+        const { source } = selected;
+        const hAlloc = otherAlloc.get(source.holder.deckId)!;
+        const avail = hAlloc[source.productId] ?? 0;
         const pull = Math.min(remaining, avail, selected.qty);
         if (pull <= 0) continue;
-        hAlloc[productId] = avail - pull;
-        moves.push({ productId, from: { deckId: h.deckId, name: h.name }, qty: pull });
-        const rec = affected.get(h.deckId) ?? {
-          deckId: h.deckId,
-          name: h.name,
-          wasActive: h.isActive,
-          pulled: [],
-        };
-        rec.pulled.push({ productId, qty: pull });
-        affected.set(h.deckId, rec);
-        remaining -= pull;
+        hAlloc[source.productId] = avail - pull;
+        recordPull(affected, source.holder, source.productId, pull, moves);
+        addToMap(targetAllocation, source.productId, pull);
         got += pull;
+        remaining -= pull;
       }
     }
 
     if (remaining > 0) {
-      shortages.push({ productId, required: req, owned: ownedCopies, missing: remaining });
+      shortages.push({ cardNumber, required: req, owned: ownedTotal, missing: remaining });
     }
-    targetAllocation[productId] = got;
   }
 
-  for (const productId of preferenceByProduct.keys()) {
-    if (!usedPreferences.has(productId)) {
-      throw new Error(`No deck source selection is needed for ${productId}`);
+  for (const cardNumber of preferenceByCard.keys()) {
+    if (!usedPreferences.has(cardNumber)) {
+      throw new Error(`No deck source selection is needed for ${cardNumber}`);
     }
   }
 

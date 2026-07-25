@@ -3,6 +3,7 @@ import type { AppEnv } from '../auth';
 import { getDb } from '../db/client';
 import {
   computeActivationPlan,
+  sumOwnedForCardNumber,
   type ActivationOptions,
   type ActivationPlan,
   type PullPreference,
@@ -11,16 +12,46 @@ import {
   applyActivationPlan,
   deactivateDeck,
   getCardLocations,
+  getCardMetaForCardNumbers,
   getCardMetaForProductIds,
   getOwnedByProductId,
+  getPrintingsByCardNumber,
+  listCardLocations,
   loadDeckStates,
   setCardLocation,
 } from '../services/deckState';
 import { getOwnedDeck } from '../services/scope';
 import { readJson } from '../util/json';
 
+function clamp(n: number, min: number, max: number): number {
+  return Math.max(min, Math.min(max, n));
+}
+
 function parseAllowBox(value: unknown): boolean {
   return value !== false;
+}
+
+function normalizePreferences(raw: unknown): PullPreference[] {
+  if (!Array.isArray(raw)) return [];
+  const out: PullPreference[] = [];
+  for (const item of raw) {
+    if (!item || typeof item !== 'object') continue;
+    const cardNumber = String(
+      (item as { cardNumber?: string; productId?: string }).cardNumber ??
+        (item as { productId?: string }).productId ??
+        '',
+    ).trim();
+    if (!cardNumber) continue;
+    const pulls = Array.isArray((item as { pulls?: unknown }).pulls)
+      ? (item as { pulls: { deckId: number; productId?: string; qty: number }[] }).pulls.map((pull) => ({
+          deckId: pull.deckId,
+          productId: String(pull.productId ?? cardNumber),
+          qty: pull.qty,
+        }))
+      : [];
+    out.push({ cardNumber, pulls });
+  }
+  return out;
 }
 
 export const activationRoutes = new Hono<AppEnv>()
@@ -47,7 +78,7 @@ export const activationRoutes = new Hono<AppEnv>()
     const userId = c.get('userId')!;
     const id = Number(c.req.param('id'));
     const body = await readJson<{ preferences: PullPreference[]; allowBox: boolean }>(c);
-    const preferences = Array.isArray(body.preferences) ? body.preferences : [];
+    const preferences = normalizePreferences(body.preferences);
     const allowBox = parseAllowBox(body.allowBox);
     let built;
     try {
@@ -85,23 +116,25 @@ export const activationRoutes = new Hono<AppEnv>()
       { maxRequired: number; decks: { deckId: number; name: string; required: number }[] }
     >();
     for (const d of states) {
-      for (const [productId, req] of Object.entries(d.required)) {
-        const rec = perCard.get(productId) ?? { maxRequired: 0, decks: [] };
+      for (const [cardNumber, req] of Object.entries(d.required)) {
+        const rec = perCard.get(cardNumber) ?? { maxRequired: 0, decks: [] };
         rec.decks.push({ deckId: d.deckId, name: d.name, required: req });
         rec.maxRequired = Math.max(rec.maxRequired, req);
-        perCard.set(productId, rec);
+        perCard.set(cardNumber, rec);
       }
     }
 
-    const meta = await getCardMetaForProductIds(db, [...perCard.keys()]);
+    const cardNumbers = [...perCard.keys()];
+    const printingsByCardNumber = await getPrintingsByCardNumber(db, cardNumbers);
+    const meta = await getCardMetaForCardNumbers(db, cardNumbers);
     const data = [...perCard.entries()]
-      .map(([productId, rec]) => {
-        const have = owned[productId] ?? 0;
-        const card = meta.get(productId);
+      .map(([cardNumber, rec]) => {
+        const printings = printingsByCardNumber[cardNumber] ?? [cardNumber];
+        const have = sumOwnedForCardNumber(cardNumber, printings, owned);
+        const card = meta.get(cardNumber);
         return {
-          productId,
-          cardNumber: card?.cardNumber ?? productId,
-          name: card?.name ?? productId,
+          cardNumber,
+          name: card?.name ?? cardNumber,
           owned: have,
           maxRequired: rec.maxRequired,
           missing: Math.max(0, rec.maxRequired - have),
@@ -114,23 +147,30 @@ export const activationRoutes = new Hono<AppEnv>()
     return c.json({ data });
   })
 
-  // GET /api/locations — physical location of every owned printing
+  // GET /api/locations — paginated physical locations of owned printings
   .get('/locations', async (c) => {
     const db = getDb(c.env);
     const userId = c.get('userId')!;
-    const locations = await getCardLocations(db, userId);
-    const productIds = Object.keys(locations);
-    const meta = await getCardMetaForProductIds(db, productIds);
-    const data = productIds
-      .map((productId) => ({
-        productId,
-        cardNumber: meta.get(productId)?.cardNumber ?? productId,
-        name: meta.get(productId)?.name ?? productId,
-        imageUrl: meta.get(productId)?.imageUrl ?? null,
-        ...locations[productId],
-      }))
-      .sort((a, b) => a.cardNumber.localeCompare(b.cardNumber) || a.productId.localeCompare(b.productId));
-    return c.json({ data });
+    const q = c.req.query();
+    const limit = clamp(Number(q.limit) || 60, 1, 250);
+    const offset = Math.max(0, Number(q.offset) || 0);
+    try {
+      const { total, rows } = await listCardLocations(db, userId, {
+        limit,
+        offset,
+        q: q.q,
+      });
+      return c.json({
+        _meta: { total, limit, offset, count: rows.length },
+        data: rows,
+      });
+    } catch (err) {
+      console.error('locations failed', err);
+      return c.json(
+        { error: err instanceof Error ? err.message : 'Failed to load locations' },
+        500,
+      );
+    }
   })
 
   // PUT /api/locations/:productId — manually redistribute owned copies across box + decks
@@ -169,7 +209,12 @@ async function buildPlanRaw(
   if (!deck) return null;
   const owned = await getOwnedByProductId(db, userId);
   const states = await loadDeckStates(db, userId);
-  const plan = computeActivationPlan({ targetId: id, owned, decks: states }, options);
+  const cardNumbers = [...new Set(states.flatMap((s) => Object.keys(s.required)))];
+  const printingsByCardNumber = await getPrintingsByCardNumber(db, cardNumbers);
+  const plan = computeActivationPlan(
+    { targetId: id, owned, printingsByCardNumber, decks: states },
+    options,
+  );
   return { plan };
 }
 
@@ -184,28 +229,45 @@ async function buildPlan(
   return enrichPlan(env, built.plan);
 }
 
-/** Attach card names to a plan for display in the SYSTEM SWAP terminal log. */
+/** Attach card names for the SYSTEM SWAP terminal log. */
 async function enrichPlan(env: AppEnv['Bindings'], plan: ActivationPlan) {
   const db = getDb(env);
+  const cardNumbers = new Set<string>();
   const productIds = new Set<string>();
+  for (const s of plan.shortages) cardNumbers.add(s.cardNumber);
+  for (const option of plan.pullOptions) cardNumbers.add(option.cardNumber);
   for (const m of plan.moves) productIds.add(m.productId);
-  for (const s of plan.shortages) productIds.add(s.productId);
-  for (const option of plan.pullOptions) productIds.add(option.productId);
   for (const a of plan.affectedDecks) for (const p of a.pulled) productIds.add(p.productId);
-  const meta = await getCardMetaForProductIds(db, [...productIds]);
-  const nameOf = (productId: string) => meta.get(productId)?.name ?? productId;
+  for (const option of plan.pullOptions) for (const h of option.holders) productIds.add(h.productId);
+
+  const metaByCard = await getCardMetaForCardNumbers(db, [...cardNumbers]);
+  const metaByProduct = await getCardMetaForProductIds(db, [...productIds]);
+  const nameOfCard = (cardNumber: string) => {
+    const meta = metaByCard.get(cardNumber);
+    return meta ? `${meta.name} (${cardNumber})` : cardNumber;
+  };
+  const nameOfProduct = (productId: string) => {
+    const meta = metaByProduct.get(productId);
+    if (!meta) return productId;
+    return productId !== meta.cardNumber
+      ? `${meta.name} (${meta.cardNumber} · ${productId})`
+      : `${meta.name} (${meta.cardNumber})`;
+  };
 
   return {
     ...plan,
-    moves: plan.moves.map((m) => ({ ...m, name: nameOf(m.productId) })),
-    shortages: plan.shortages.map((s) => ({ ...s, name: nameOf(s.productId) })),
+    moves: plan.moves.map((m) => ({ ...m, name: nameOfProduct(m.productId) })),
+    shortages: plan.shortages.map((s) => ({
+      ...s,
+      name: nameOfCard(s.cardNumber),
+    })),
     pullOptions: plan.pullOptions.map((option) => ({
       ...option,
-      name: nameOf(option.productId),
+      name: nameOfCard(option.cardNumber),
     })),
     affectedDecks: plan.affectedDecks.map((a) => ({
       ...a,
-      pulled: a.pulled.map((p) => ({ ...p, name: nameOf(p.productId) })),
+      pulled: a.pulled.map((p) => ({ ...p, name: nameOfProduct(p.productId) })),
     })),
   };
 }
