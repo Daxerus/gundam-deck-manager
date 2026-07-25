@@ -99,7 +99,7 @@ export function DeckEditor() {
       <div className="grid gap-4 lg:grid-cols-2">
         {/* Deck contents */}
         <Panel
-          title="Composición"
+          title="Deck"
           subtitle={`${v.mainCount}/${MAIN_DECK_SIZE} · colores: ${v.colors.join(', ') || '—'}`}
           tone={v.mainCount === MAIN_DECK_SIZE ? 'hud' : 'amber'}
         >
@@ -116,20 +116,14 @@ export function DeckEditor() {
 
         {/* Card search to add */}
         <div className="relative self-start lg:sticky lg:top-16">
-          <div className="pointer-events-none absolute left-0 top-0 z-[100]">
-            {preview?.side === 'deck' && (
-              <div key={preview.card.productId} className="w-96">
-                <DeckCardPreview card={preview.card} />
-              </div>
-            )}
-          </div>
-          <div className="pointer-events-none absolute right-full top-0 z-[100] mr-3">
-            {preview?.side === 'add' && (
-              <div key={preview.card.productId} className="w-96">
-                <DeckCardPreview card={preview.card} />
-              </div>
-            )}
-          </div>
+          {preview && (
+            <PreviewLayer
+              key={preview.card.productId}
+              card={preview.card}
+              side={preview.side}
+              onClose={() => setPreview(null)}
+            />
+          )}
           <AddCards
             getQty={(productId) => qtyByProductId.get(productId) ?? 0}
             onAdd={(productId, q) => setCard.mutate({ productId, quantity: q })}
@@ -207,7 +201,10 @@ function DeckContents({
   return (
     <div className="space-y-5">
       <p className="font-mono text-[10px] text-muted">
-        Clic <span className="text-ok">+1</span> · Shift+clic <span className="text-alert">−1</span>
+        <span className="hidden sm:inline">
+          Clic <span className="text-ok">+1</span> · Shift+clic <span className="text-alert">−1</span>
+        </span>
+        <span className="sm:hidden">Mantén pulsado para modificar la cantidad de cada carta</span>
       </p>
       <DeckTypeSection label="Units" entries={units} onSet={onSet} onPreview={onPreview} />
       <DeckTypeSection
@@ -241,7 +238,7 @@ function DeckTypeSection({
         <span className="h-px flex-1 bg-gradient-to-r from-hud/30 to-transparent" />
       </div>
       {entries.length > 0 ? (
-        <div className="grid grid-cols-3 gap-2 sm:grid-cols-4">
+        <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
           {entries.map((entry) => (
             <DeckCardTile
               key={entry.productId}
@@ -269,6 +266,7 @@ function DeckCardTile({
   onSet: (productId: string, quantity: number) => void;
   onPreview: (card: Card | null) => void;
 }) {
+  const longPress = useLongPressControls({ onOpen: () => onPreview(null) });
   const cc = colorClasses(entry.card?.color);
   const stock =
     entry.owned <= 0 ? 'none' : entry.owned < entry.quantity ? 'partial' : 'ok';
@@ -282,16 +280,46 @@ function DeckCardTile({
         : 'border-ok/50 text-ok';
 
   return (
-    <button
-      type="button"
+    <div
+      ref={longPress.ref}
+      role="button"
+      tabIndex={0}
       className={`group relative border ${stockBorder} bg-panel/50 outline-none transition hover:shadow-hud focus:shadow-hud`}
       title={`${entry.card?.name ?? entry.productId} — clic: +1 · shift+clic: −1`}
-      onClick={(event) =>
-        onSet(entry.productId, event.shiftKey ? Math.max(0, entry.quantity - 1) : entry.quantity + 1)
-      }
-      onMouseEnter={() => onPreview(entry.card)}
-      onMouseLeave={() => onPreview(null)}
-      onFocus={() => onPreview(entry.card)}
+      aria-label={`${entry.card?.name ?? entry.productId}, ${entry.quantity} copias`}
+      onClick={(event) => {
+        if (longPress.consumeClick()) return;
+        if (longPress.open) {
+          longPress.close();
+          return;
+        }
+        if (isTouchUi()) {
+          onPreview(entry.card);
+          return;
+        }
+        onSet(entry.productId, event.shiftKey ? Math.max(0, entry.quantity - 1) : entry.quantity + 1);
+        onPreview(entry.card);
+      }}
+      onKeyDown={(event) => {
+        if (event.key !== 'Enter' && event.key !== ' ') return;
+        event.preventDefault();
+        if (isTouchUi()) {
+          onPreview(entry.card);
+          return;
+        }
+        onSet(entry.productId, event.shiftKey ? Math.max(0, entry.quantity - 1) : entry.quantity + 1);
+        onPreview(entry.card);
+      }}
+      {...longPress.handlers}
+      onMouseEnter={() => {
+        if (longPress.open || !canHoverPreview()) return;
+        onPreview(entry.card);
+      }}
+      onMouseLeave={() => {
+        if (!canHoverPreview()) return;
+        onPreview(null);
+      }}
+      onFocus={(event) => event.currentTarget.matches(':focus-visible') && onPreview(entry.card)}
       onBlur={() => onPreview(null)}
     >
       <div className="aspect-[5/7] w-full overflow-hidden">
@@ -303,10 +331,43 @@ function DeckCardTile({
           </span>
         )}
       </div>
-      <span className={`absolute right-0.5 top-0.5 border bg-void/90 px-1.5 font-mono text-[16px] ${stockBadge}`}>
+      {longPress.open && (
+        <QuantityOverlay
+          quantity={entry.quantity}
+          onAdd={() => onSet(entry.productId, entry.quantity + 1)}
+          onRemove={() => onSet(entry.productId, Math.max(0, entry.quantity - 1))}
+        />
+      )}
+      <span
+        className={`pointer-events-none absolute right-0.5 top-0.5 z-30 border bg-void/90 px-1.5 font-mono text-[16px] ${stockBadge}`}
+      >
         ×{entry.quantity}
       </span>
-    </button>
+    </div>
+  );
+}
+
+function PreviewLayer({
+  card,
+  side,
+  onClose,
+}: {
+  card: Card;
+  side: 'deck' | 'add';
+  onClose: () => void;
+}) {
+  return (
+    <div
+      className={`fixed inset-0 z-[100] flex items-center justify-center bg-void/70 p-4 lg:pointer-events-none lg:absolute lg:inset-auto lg:block lg:w-96 lg:bg-transparent lg:p-0 ${
+        side === 'deck' ? 'lg:left-0 lg:top-0' : 'lg:right-full lg:top-0 lg:mr-3'
+      }`}
+      onClick={onClose}
+    >
+      <div className="max-h-[calc(100dvh-2rem)] w-full max-w-sm overflow-auto lg:max-h-none lg:max-w-none lg:overflow-visible">
+        <DeckCardPreview card={card} />
+        <p className="mt-2 text-center font-mono text-[10px] text-muted lg:hidden">Toca para cerrar</p>
+      </div>
+    </div>
   );
 }
 
@@ -409,32 +470,24 @@ function AddCards({
         />
       </div>
       <p className="mb-3 font-mono text-[10px] text-muted">
-        Clic <span className="text-ok">+1</span> · Shift+clic <span className="text-alert">−1</span>
+        <span className="hidden sm:inline">
+          Clic <span className="text-ok">+1</span> · Shift+clic <span className="text-alert">−1</span>
+        </span>
+        <span className="sm:hidden">Mantén pulsado para modificar la cantidad de cada carta</span>
       </p>
-      <div ref={scrollRef} className="grid max-h-[520px] grid-cols-3 gap-2 overflow-auto sm:grid-cols-4">
+      <div ref={scrollRef} className="grid max-h-[520px] grid-cols-2 gap-2 overflow-auto sm:grid-cols-4">
         {items.map((card) => {
           const q = getQty(card.productId);
           const cc = colorClasses(card.color);
           return (
-            <button
+            <AddCardTile
               key={card.productId}
-              onClick={(e) => onAdd(card.productId, e.shiftKey ? Math.max(0, q - 1) : q + 1)}
-              className={`group relative border ${cc.border} bg-panel/50 transition hover:shadow-hud`}
-              title={`${card.name} — clic: +1 · shift+clic: −1`}
-              onMouseEnter={() => onPreview(card)}
-              onMouseLeave={() => onPreview(null)}
-              onFocus={() => onPreview(card)}
-              onBlur={() => onPreview(null)}
-            >
-              <div className="aspect-[5/7] w-full overflow-hidden">
-                <CardImage card={card} />
-              </div>
-              {q > 0 && (
-                <span className="absolute right-0.5 top-0.5 border border-ok/50 bg-void/85 px-1.5 font-mono text-[16px] text-ok">
-                  {q}
-                </span>
-              )}
-            </button>
+              card={card}
+              quantity={q}
+              borderClass={cc.border}
+              onSet={(quantity) => onAdd(card.productId, quantity)}
+              onPreview={onPreview}
+            />
           );
         })}
         <div ref={loadMoreRef} className="col-span-full h-1" />
@@ -450,4 +503,228 @@ function AddCards({
       </p>
     </Panel>
   );
+}
+
+function AddCardTile({
+  card,
+  quantity,
+  borderClass,
+  onSet,
+  onPreview,
+}: {
+  card: Card;
+  quantity: number;
+  borderClass: string;
+  onSet: (quantity: number) => void;
+  onPreview: (card: Card | null) => void;
+}) {
+  const longPress = useLongPressControls({ onOpen: () => onPreview(null) });
+
+  return (
+    <div
+      ref={longPress.ref}
+      role="button"
+      tabIndex={0}
+      className={`group relative border ${borderClass} bg-panel/50 outline-none transition hover:shadow-hud focus:shadow-hud`}
+      title={`${card.name} — clic: +1 · shift+clic: −1`}
+      aria-label={`${card.name}, ${quantity} copias en el deck`}
+      onClick={(event) => {
+        if (longPress.consumeClick()) return;
+        if (longPress.open) {
+          longPress.close();
+          return;
+        }
+        if (isTouchUi()) {
+          onPreview(card);
+          return;
+        }
+        onSet(event.shiftKey ? Math.max(0, quantity - 1) : quantity + 1);
+        onPreview(card);
+      }}
+      onKeyDown={(event) => {
+        if (event.key !== 'Enter' && event.key !== ' ') return;
+        event.preventDefault();
+        if (isTouchUi()) {
+          onPreview(card);
+          return;
+        }
+        onSet(event.shiftKey ? Math.max(0, quantity - 1) : quantity + 1);
+        onPreview(card);
+      }}
+      {...longPress.handlers}
+      onMouseEnter={() => {
+        if (longPress.open || !canHoverPreview()) return;
+        onPreview(card);
+      }}
+      onMouseLeave={() => {
+        if (!canHoverPreview()) return;
+        onPreview(null);
+      }}
+      onFocus={(event) => event.currentTarget.matches(':focus-visible') && onPreview(card)}
+      onBlur={() => onPreview(null)}
+    >
+      <div className="aspect-[5/7] w-full overflow-hidden">
+        <CardImage card={card} />
+      </div>
+      {longPress.open && (
+        <QuantityOverlay
+          quantity={quantity}
+          onAdd={() => onSet(quantity + 1)}
+          onRemove={() => onSet(Math.max(0, quantity - 1))}
+        />
+      )}
+      {!longPress.open && (
+        <button
+          type="button"
+          className="absolute bottom-1 left-1/2 z-30 flex h-8 w-8 -translate-x-1/2 items-center justify-center border border-ok/60 bg-void/85 font-display text-xl text-ok shadow-hud active:bg-ok/25 sm:hidden"
+          aria-label={`Añadir una copia de ${card.name}`}
+          onPointerDown={(event) => event.stopPropagation()}
+          onClick={(event) => {
+            event.stopPropagation();
+            onSet(quantity + 1);
+          }}
+        >
+          +
+        </button>
+      )}
+      {(quantity > 0 || longPress.open) && (
+        <span className="pointer-events-none absolute right-0.5 top-0.5 z-30 border border-ok/50 bg-void/85 px-1.5 font-mono text-[16px] text-ok">
+          {quantity}
+        </span>
+      )}
+    </div>
+  );
+}
+
+function QuantityOverlay({
+  quantity,
+  onAdd,
+  onRemove,
+}: {
+  quantity: number;
+  onAdd: () => void;
+  onRemove: () => void;
+}) {
+  const stop = (event: React.SyntheticEvent) => {
+    event.stopPropagation();
+  };
+
+  return (
+    <div
+      className="absolute inset-0 z-20 grid grid-rows-2 bg-void/55 backdrop-blur-[1px]"
+      onClick={stop}
+      onPointerDown={stop}
+      onPointerUp={stop}
+      onPointerMove={stop}
+    >
+      <button
+        type="button"
+        className="flex items-center justify-center border-b border-ok/50 bg-ok/10 font-display text-4xl text-ok active:bg-ok/25"
+        aria-label="Añadir una copia"
+        onPointerDown={stop}
+        onClick={(event) => {
+          event.stopPropagation();
+          onAdd();
+        }}
+      >
+        +
+      </button>
+      <button
+        type="button"
+        disabled={quantity <= 0}
+        className="flex items-center justify-center bg-alert/10 font-display text-4xl text-alert active:bg-alert/25 disabled:opacity-30"
+        aria-label="Restar una copia"
+        onPointerDown={stop}
+        onClick={(event) => {
+          event.stopPropagation();
+          onRemove();
+        }}
+      >
+        −
+      </button>
+    </div>
+  );
+}
+
+function canHoverPreview() {
+  return typeof window !== 'undefined' && window.matchMedia('(hover: hover) and (pointer: fine)').matches;
+}
+
+function isTouchUi() {
+  return !canHoverPreview();
+}
+
+function useLongPressControls({
+  delay = 450,
+  onOpen,
+}: {
+  delay?: number;
+  onOpen?: () => void;
+} = {}) {
+  const [open, setOpen] = useState(false);
+  const rootRef = useRef<HTMLDivElement | null>(null);
+  const timerRef = useRef<number | null>(null);
+  const startPointRef = useRef<{ x: number; y: number } | null>(null);
+  const suppressClickRef = useRef(false);
+  const onOpenRef = useRef(onOpen);
+  onOpenRef.current = onOpen;
+
+  const cancelTimer = () => {
+    if (timerRef.current !== null) {
+      window.clearTimeout(timerRef.current);
+      timerRef.current = null;
+    }
+    startPointRef.current = null;
+  };
+
+  const close = () => setOpen(false);
+
+  useEffect(() => cancelTimer, []);
+
+  useEffect(() => {
+    if (!open) return;
+
+    const onPointerDownOutside = (event: PointerEvent) => {
+      const root = rootRef.current;
+      if (!root || root.contains(event.target as Node)) return;
+      setOpen(false);
+    };
+
+    document.addEventListener('pointerdown', onPointerDownOutside, true);
+    return () => document.removeEventListener('pointerdown', onPointerDownOutside, true);
+  }, [open]);
+
+  return {
+    open,
+    ref: rootRef,
+    close,
+    consumeClick: () => {
+      if (!suppressClickRef.current) return false;
+      suppressClickRef.current = false;
+      return true;
+    },
+    handlers: {
+      onPointerDown: (event: React.PointerEvent<HTMLDivElement>) => {
+        if (event.pointerType === 'mouse' && event.button !== 0) return;
+        if ((event.target as HTMLElement).closest('button')) return;
+        cancelTimer();
+        startPointRef.current = { x: event.clientX, y: event.clientY };
+        timerRef.current = window.setTimeout(() => {
+          suppressClickRef.current = true;
+          onOpenRef.current?.();
+          setOpen(true);
+          timerRef.current = null;
+          navigator.vibrate?.(30);
+        }, delay);
+      },
+      onPointerMove: (event: React.PointerEvent<HTMLDivElement>) => {
+        const start = startPointRef.current;
+        if (!start || Math.hypot(event.clientX - start.x, event.clientY - start.y) <= 10) return;
+        cancelTimer();
+      },
+      onPointerUp: cancelTimer,
+      onPointerCancel: cancelTimer,
+      onContextMenu: (event: React.MouseEvent<HTMLDivElement>) => event.preventDefault(),
+    },
+  };
 }
