@@ -170,6 +170,56 @@ export const decksRoutes = new Hono<AppEnv>()
     return c.json({ ok: true });
   })
 
+  // PUT /api/decks/:id/cards/bulk — replace entire deck composition in one request
+  .put('/:id/cards/bulk', async (c) => {
+    const db = getDb(c.env);
+    const userId = c.get('userId')!;
+    const id = Number(c.req.param('id'));
+    const owned = await getOwnedDeck(db, userId, id);
+    if (!owned) return c.json({ error: 'Deck not found' }, 404);
+
+    const body = await readJson<{ cards: { cardNumber: string; quantity: number }[] }>(c);
+    if (!Array.isArray(body.cards)) return c.json({ error: 'cards array required' }, 400);
+
+    const qtyByNumber = new Map<string, number>();
+    for (const item of body.cards) {
+      const cardNumber = (item.cardNumber ?? '').trim();
+      if (!cardNumber) continue;
+      const quantity = clampInt(item.quantity ?? 0, 0, 99);
+      if (quantity <= 0) continue;
+      qtyByNumber.set(cardNumber, Math.min(99, (qtyByNumber.get(cardNumber) ?? 0) + quantity));
+    }
+
+    const cardNumbers = [...qtyByNumber.keys()];
+    if (cardNumbers.length > 0) {
+      const found = await db
+        .select({ cardNumber: cards.cardNumber })
+        .from(cards)
+        .where(inArray(cards.cardNumber, cardNumbers))
+        .all();
+      const foundSet = new Set(found.map((row) => row.cardNumber));
+      const missing = cardNumbers.filter((cn) => !foundSet.has(cn));
+      if (missing.length > 0) return c.json({ error: 'Card not found', missing }, 404);
+    }
+
+    const now = Math.floor(Date.now() / 1000);
+    const stmts = [
+      db.delete(deckCards).where(eq(deckCards.deckId, id)),
+      ...[...qtyByNumber.entries()].map(([cardNumber, quantity]) =>
+        db.insert(deckCards).values({ deckId: id, cardNumber, quantity }),
+      ),
+      db
+        .update(decks)
+        .set({ updatedAt: now })
+        .where(and(eq(decks.id, id), eq(decks.userId, userId))),
+    ];
+    await db.batch(stmts as [(typeof stmts)[number], ...typeof stmts]);
+    return c.json({
+      ok: true,
+      cards: [...qtyByNumber.entries()].map(([cardNumber, quantity]) => ({ cardNumber, quantity })),
+    });
+  })
+
   // PUT /api/decks/:id/cards — set quantity for a card_number (0 removes)
   .put('/:id/cards', async (c) => {
     const db = getDb(c.env);

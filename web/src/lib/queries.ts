@@ -149,6 +149,20 @@ export function useSetDeckCard(deckId: number) {
   });
 }
 
+/** Replace the full deck composition in a single request (client-side draft save). */
+export function useSaveDeckCards(deckId: number) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (cards: { cardNumber: string; quantity: number }[]) =>
+      api.put(`/decks/${deckId}/cards/bulk`, { cards }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['deck', deckId] });
+      qc.invalidateQueries({ queryKey: ['decks'] });
+      qc.invalidateQueries({ queryKey: ['shopping'] });
+    },
+  });
+}
+
 export function useActivationPlan() {
   return useMutation({
     mutationFn: ({ deckId, allowBox = true }: { deckId: number; allowBox?: boolean }) =>

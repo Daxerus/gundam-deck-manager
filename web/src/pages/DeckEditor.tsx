@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { Panel, HudButton, StatusBadge } from '../components/hud';
 import { Filters } from '../components/Filters';
@@ -7,13 +7,13 @@ import {
   useInfiniteCards,
   useDeck,
   useDeleteDeck,
-  useSetDeckCard,
+  useSaveDeckCards,
   useSets,
   useUpdateDeck,
   type CardFilters,
 } from '../lib/queries';
 import { useLoadMoreOnScroll } from '../lib/useLoadMoreOnScroll';
-import { MAIN_DECK_SIZE, RESOURCE_DECK_SIZE } from '../lib/rules';
+import { MAIN_DECK_SIZE, RESOURCE_DECK_SIZE, validateDeckDraft } from '../lib/rules';
 import { colorClasses } from '../lib/colors';
 import type { Card, DeckCardEntry, DeckValidation } from '../lib/types';
 
@@ -25,20 +25,133 @@ export function DeckEditor() {
   const deck = useDeck(deckId);
   const update = useUpdateDeck();
   const del = useDeleteDeck();
-  const setCard = useSetDeckCard(deckId);
+  const saveCards = useSaveDeckCards(deckId);
 
   const [name, setName] = useState('');
   const [preview, setPreview] = useState<{ card: Card; side: 'deck' | 'add' } | null>(null);
+  const [draftQty, setDraftQty] = useState<Map<string, number>>(new Map());
+  const [cardMeta, setCardMeta] = useState<Map<string, Card>>(new Map());
+  const [dirty, setDirty] = useState(false);
+  const syncedAt = useRef<number | null>(null);
+
   useEffect(() => {
     if (deck.data) setName(deck.data.name);
   }, [deck.data?.name]);
+
+  useEffect(() => {
+    if (!deck.data) return;
+    if (dirty) return;
+    if (syncedAt.current === deck.data.updatedAt) return;
+    syncedAt.current = deck.data.updatedAt;
+    setDraftQty(new Map(deck.data.cards.map((c) => [c.cardNumber, c.quantity])));
+    setCardMeta(
+      new Map(
+        deck.data.cards
+          .filter((c): c is DeckCardEntry & { card: Card } => c.card != null)
+          .map((c) => [c.cardNumber, c.card]),
+      ),
+    );
+  }, [deck.data, dirty]);
+
+  useEffect(() => {
+    if (!dirty) return;
+    const onBeforeUnload = (e: BeforeUnloadEvent) => {
+      e.preventDefault();
+      e.returnValue = '';
+    };
+    window.addEventListener('beforeunload', onBeforeUnload);
+    return () => window.removeEventListener('beforeunload', onBeforeUnload);
+  }, [dirty]);
+
+  const draftEntries = useMemo(() => {
+    if (!deck.data) return [] as DeckCardEntry[];
+    const serverByNumber = new Map(deck.data.cards.map((c) => [c.cardNumber, c]));
+    const entries: DeckCardEntry[] = [];
+    for (const [cardNumber, quantity] of draftQty) {
+      if (quantity <= 0) continue;
+      const server = serverByNumber.get(cardNumber);
+      entries.push({
+        cardNumber,
+        quantity,
+        owned: server?.owned ?? 0,
+        allocated: server?.allocated ?? 0,
+        allocatedByPrinting: server?.allocatedByPrinting,
+        card: cardMeta.get(cardNumber) ?? server?.card ?? null,
+      });
+    }
+    entries.sort((a, b) => cardSortKey(a.card).localeCompare(cardSortKey(b.card)));
+    return entries;
+  }, [deck.data, draftQty, cardMeta]);
+
+  const liveValidation = useMemo(() => {
+    if (!deck.data) return null;
+    return validateDeckDraft(
+      draftEntries.map((e) => ({
+        cardNumber: e.cardNumber,
+        quantity: e.quantity,
+        name: e.card?.name,
+        color: e.card?.color,
+        owned: e.owned,
+      })),
+      deck.data.resourceDeckSize,
+    );
+  }, [deck.data, draftEntries]);
 
   if (deck.isLoading) return <p className="font-mono text-sm text-muted">Cargando deck…</p>;
   if (!deck.data) return <p className="font-mono text-sm text-alert">Deck no encontrado.</p>;
 
   const d = deck.data;
-  const v = d.validation;
-  const qtyByCardNumber = new Map(d.cards.map((c) => [c.cardNumber, c.quantity]));
+  const v = liveValidation ?? d.validation;
+
+  function setLocalCard(cardNumber: string, quantity: number, card?: Card | null) {
+    setDraftQty((prev) => {
+      const next = new Map(prev);
+      if (quantity <= 0) next.delete(cardNumber);
+      else next.set(cardNumber, quantity);
+      return next;
+    });
+    if (card) {
+      setCardMeta((prev) => {
+        const next = new Map(prev);
+        next.set(cardNumber, card);
+        return next;
+      });
+    }
+    setDirty(true);
+  }
+
+  function discard() {
+    setDraftQty(new Map(d.cards.map((c) => [c.cardNumber, c.quantity])));
+    setCardMeta(
+      new Map(
+        d.cards
+          .filter((c): c is DeckCardEntry & { card: Card } => c.card != null)
+          .map((c) => [c.cardNumber, c.card]),
+      ),
+    );
+    setDirty(false);
+  }
+
+  async function save() {
+    const cards = [...draftQty.entries()]
+      .filter(([, quantity]) => quantity > 0)
+      .map(([cardNumber, quantity]) => ({ cardNumber, quantity }));
+    const snapshot = serializeQty(draftQty);
+    await saveCards.mutateAsync(cards);
+    // Clear dirty only if the draft was not edited while the request was in flight.
+    setDraftQty((current) => {
+      if (serializeQty(current) === snapshot) {
+        setDirty(false);
+        syncedAt.current = null;
+      }
+      return current;
+    });
+  }
+
+  function leave() {
+    if (dirty && !confirm('Hay cambios sin guardar. ¿Salir sin guardar?')) return;
+    navigate('/decks');
+  }
 
   return (
     <div className="space-y-4">
@@ -52,7 +165,12 @@ export function DeckEditor() {
                 Activo
               </StatusBadge>
             )}
-            <HudButton variant="ghost" onClick={() => navigate('/decks')}>
+            {dirty && (
+              <StatusBadge tone="amber" blink>
+                Sin guardar
+              </StatusBadge>
+            )}
+            <HudButton variant="ghost" onClick={leave}>
               ◄ Volver
             </HudButton>
           </div>
@@ -78,18 +196,25 @@ export function DeckEditor() {
               onBlur={(e) => update.mutate({ id: deckId, resourceDeckSize: Number(e.target.value) })}
             />
           </label>
-          <HudButton
-            variant="alert"
-            className="mb-0.5"
-            onClick={() => {
-              if (confirm(`¿Eliminar el deck "${d.name}"?`)) {
-                del.mutate(deckId);
-                navigate('/decks');
-              }
-            }}
-          >
-            Eliminar deck
-          </HudButton>
+          <div className="mb-0.5 flex flex-wrap gap-2">
+            <HudButton variant="ghost" onClick={discard} disabled={!dirty || saveCards.isPending}>
+              Descartar
+            </HudButton>
+            <HudButton variant="ok" onClick={save} disabled={!dirty || saveCards.isPending}>
+              {saveCards.isPending ? 'Guardando…' : 'Guardar deck'}
+            </HudButton>
+            <HudButton
+              variant="alert"
+              onClick={() => {
+                if (confirm(`¿Eliminar el deck "${d.name}"?`)) {
+                  del.mutate(deckId);
+                  navigate('/decks');
+                }
+              }}
+            >
+              Eliminar deck
+            </HudButton>
+          </div>
         </div>
       </Panel>
 
@@ -103,12 +228,12 @@ export function DeckEditor() {
           subtitle={`${v.mainCount}/${MAIN_DECK_SIZE} · colores: ${v.colors.join(', ') || '—'}`}
           tone={v.mainCount === MAIN_DECK_SIZE ? 'hud' : 'amber'}
         >
-          {d.cards.length === 0 ? (
+          {draftEntries.length === 0 ? (
             <p className="font-ui text-muted">Deck vacío. Añade cartas desde el buscador de la derecha.</p>
           ) : (
             <DeckContents
-              entries={d.cards}
-              onSet={(cardNumber, quantity) => setCard.mutate({ cardNumber, quantity })}
+              entries={draftEntries}
+              onSet={(cardNumber, quantity) => setLocalCard(cardNumber, quantity)}
               onPreview={(card) => setPreview(card ? { card, side: 'deck' } : null)}
             />
           )}
@@ -125,14 +250,27 @@ export function DeckEditor() {
             />
           )}
           <AddCards
-            getQty={(cardNumber) => qtyByCardNumber.get(cardNumber) ?? 0}
-            onAdd={(cardNumber, q) => setCard.mutate({ cardNumber, quantity: q })}
+            getQty={(cardNumber) => draftQty.get(cardNumber) ?? 0}
+            onAdd={(card, q) => setLocalCard(card.cardNumber, q, card)}
             onPreview={(card) => setPreview(card ? { card, side: 'add' } : null)}
           />
         </div>
       </div>
     </div>
   );
+}
+
+function cardSortKey(card: Card | null): string {
+  if (!card) return 'zzz';
+  return `${card.cardType ?? 'z'}-${String(card.cost ?? 99).padStart(2, '0')}-${card.name}`;
+}
+
+function serializeQty(qty: Map<string, number>): string {
+  return [...qty.entries()]
+    .filter(([, quantity]) => quantity > 0)
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([cardNumber, quantity]) => `${cardNumber}:${quantity}`)
+    .join('|');
 }
 
 function ValidationSummary({
@@ -370,7 +508,7 @@ function AddCards({
   onPreview,
 }: {
   getQty: (cardNumber: string) => number;
-  onAdd: (cardNumber: string, quantity: number) => void;
+  onAdd: (card: Card, quantity: number) => void;
   onPreview: (card: Card | null) => void;
 }) {
   const [filters, setFilters] = useState<CardFilters>({
@@ -461,7 +599,7 @@ function AddCardTile({
 }: {
   card: Card;
   getQty: (cardNumber: string) => number;
-  onAdd: (cardNumber: string, quantity: number) => void;
+  onAdd: (card: Card, quantity: number) => void;
   onPreview: (card: Card | null) => void;
 }) {
   // Representative printing only — deck composition is by card_number.
@@ -491,7 +629,7 @@ function AddCardTile({
       </button>
       <QuantityStepper
         value={quantity}
-        onChange={(next) => onAdd(card.cardNumber, next)}
+        onChange={(next) => onAdd(card, next)}
       />
     </div>
   );
