@@ -42,7 +42,7 @@ export function ShoppingList() {
       {rows.length > 0 && (
         <Panel bodyClassName="p-0">
           <div className="relative overflow-auto">
-            <div className="pointer-events-none absolute right-0 top-0 z-[40] w-44 sm:w-52">
+            <div className="pointer-events-none fixed right-4 top-24 z-50 w-44 sm:w-52">
               {preview && (
                 <div
                   key={preview.cardNumber}

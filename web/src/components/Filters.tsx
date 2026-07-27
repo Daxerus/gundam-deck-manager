@@ -73,13 +73,13 @@ export function Filters({
           ))}
         </select>
       </Field>
-      <Field label="Coste">
+      <Field label="Nivel">
         <input
           className="hud-input w-16"
           type="number"
           min={0}
-          value={filters.cost ?? ''}
-          onChange={(e) => set({ cost: e.target.value })}
+          value={filters.level ?? ''}
+          onChange={(e) => set({ level: e.target.value })}
         />
       </Field>
       {showStatusColor && (

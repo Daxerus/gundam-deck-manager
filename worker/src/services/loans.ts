@@ -456,7 +456,13 @@ export async function getCollectionStatus(
   const owned = await getOwnedByProductId(db, userId);
   const { lentOutByProduct, borrowedInByProduct } = await loadLoanSides(db, userId);
 
-  const deckRows = await db.select().from(decks).where(eq(decks.userId, userId)).all();
+  // Only assembled (active) decks hold copies away from the box: an inactive deck
+  // may keep stale allocations after being cannibalised, but its cards are available.
+  const deckRows = await db
+    .select()
+    .from(decks)
+    .where(and(eq(decks.userId, userId), eq(decks.isActive, true)))
+    .all();
   const deckName = new Map(deckRows.map((d) => [d.id, d.name] as const));
   const deckIds = deckRows.map((d) => d.id);
   const allocRows =

@@ -222,8 +222,8 @@ function matchesFriendFilters(
   if (filters.card_type && (card.cardType ?? '').toLowerCase() !== filters.card_type.toLowerCase()) {
     return false;
   }
-  if (filters.cost !== undefined && filters.cost !== '' && Number.isFinite(Number(filters.cost))) {
-    if (card.cost !== Number(filters.cost)) return false;
+  if (filters.level !== undefined && filters.level !== '' && Number.isFinite(Number(filters.level))) {
+    if (card.level !== Number(filters.level)) return false;
   }
   if (filters.status_color) {
     if (!status || status.statusColor !== filters.status_color) return false;

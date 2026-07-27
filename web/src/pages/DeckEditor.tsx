@@ -462,8 +462,8 @@ function PreviewLayer({
 }) {
   return (
     <div
-      className={`fixed inset-0 z-[100] flex items-center justify-center bg-void/70 p-4 lg:pointer-events-none lg:absolute lg:inset-auto lg:block lg:w-96 lg:bg-transparent lg:p-0 ${
-        side === 'deck' ? 'lg:left-0 lg:top-0' : 'lg:right-full lg:top-0 lg:mr-3'
+      className={`fixed inset-0 z-[100] flex items-center justify-center bg-void/70 p-4 lg:pointer-events-none lg:inset-auto lg:top-24 lg:block lg:w-96 lg:bg-transparent lg:p-0 ${
+        side === 'deck' ? 'lg:right-4' : 'lg:left-4'
       }`}
       onClick={onClose}
     >

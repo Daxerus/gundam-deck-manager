@@ -169,7 +169,7 @@ function LocationsPanel({ decks }: { decks: DeckSummary[] }) {
             </p>
           ) : (
             <div className="relative">
-              <div className="pointer-events-none absolute right-0 top-0 z-[40] w-44 sm:w-52">
+              <div className="pointer-events-none fixed right-4 top-24 z-50 w-44 sm:w-52">
                 {preview && (
                   <div key={preview.productId} className="animate-card-preview-in border border-hud/50 bg-void p-1 shadow-hud-strong">
                     <div className="aspect-[5/7] w-full overflow-hidden">

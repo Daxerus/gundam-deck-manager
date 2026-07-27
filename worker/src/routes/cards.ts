@@ -19,7 +19,7 @@ function collectionCondition(userId: number, statusColor: StatusColor | null, pr
   const alloc = sql`coalesce((
     select sum(a.quantity) from allocations a
     inner join decks d on d.id = a.deck_id
-    where d.user_id = ${userId} and a.product_id = ${productId}
+    where d.user_id = ${userId} and d.is_active = 1 and a.product_id = ${productId}
   ), 0)`;
   const lent = sql`coalesce((
     select sum(li.quantity) from loan_items li
