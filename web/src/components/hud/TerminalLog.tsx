@@ -23,43 +23,90 @@ const prefers = () =>
 export function TerminalLog({
   lines,
   intervalMs = 220,
+  characterIntervalMs,
   onDone,
   className = '',
 }: {
   lines: LogLine[];
   intervalMs?: number;
+  characterIntervalMs?: number;
   onDone?: () => void;
   className?: string;
 }) {
   const [shown, setShown] = useState(prefers() ? lines.length : 0);
+  const [currentText, setCurrentText] = useState('');
   const doneRef = useRef(false);
+  const onDoneRef = useRef(onDone);
+
+  onDoneRef.current = onDone;
 
   useEffect(() => {
-    if (prefers()) {
-      setShown(lines.length);
+    const finish = () => {
       if (!doneRef.current) {
         doneRef.current = true;
-        onDone?.();
+        onDoneRef.current?.();
       }
+    };
+
+    if (prefers()) {
+      setShown(lines.length);
+      setCurrentText('');
+      finish();
       return;
     }
+
     setShown(0);
+    setCurrentText('');
     doneRef.current = false;
+
+    if (lines.length === 0) {
+      finish();
+      return;
+    }
+
+    if (characterIntervalMs !== undefined) {
+      let lineIndex = 0;
+      let characterIndex = 0;
+      let timeout: number;
+
+      const typeNextCharacter = () => {
+        characterIndex += 1;
+        setCurrentText(lines[lineIndex].text.slice(0, characterIndex));
+
+        if (characterIndex < lines[lineIndex].text.length) {
+          timeout = window.setTimeout(typeNextCharacter, characterIntervalMs);
+          return;
+        }
+
+        timeout = window.setTimeout(() => {
+          lineIndex += 1;
+          setShown(lineIndex);
+          setCurrentText('');
+          characterIndex = 0;
+
+          if (lineIndex >= lines.length) {
+            finish();
+          } else {
+            timeout = window.setTimeout(typeNextCharacter, characterIntervalMs);
+          }
+        }, intervalMs);
+      };
+
+      timeout = window.setTimeout(typeNextCharacter, characterIntervalMs);
+      return () => window.clearTimeout(timeout);
+    }
+
     let i = 0;
     const t = setInterval(() => {
       i += 1;
       setShown(i);
       if (i >= lines.length) {
         clearInterval(t);
-        if (!doneRef.current) {
-          doneRef.current = true;
-          onDone?.();
-        }
+        finish();
       }
     }, intervalMs);
     return () => clearInterval(t);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [lines]);
+  }, [characterIntervalMs, intervalMs, lines]);
 
   return (
     <div
@@ -71,7 +118,13 @@ export function TerminalLog({
           {l.text}
         </div>
       ))}
-      {shown < lines.length && <span className="text-hud animate-blink">_</span>}
+      {shown < lines.length && (
+        <div className={toneClass[lines[shown].tone ?? 'hud']}>
+          <span className="text-muted">{'>'} </span>
+          {currentText}
+          <span className="text-hud animate-blink">_</span>
+        </div>
+      )}
     </div>
   );
 }
