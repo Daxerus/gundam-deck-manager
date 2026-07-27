@@ -9,6 +9,9 @@ import { Decks } from './pages/Decks';
 import { DeckEditor } from './pages/DeckEditor';
 import { ActiveDecks } from './pages/ActiveDecks';
 import { ShoppingList } from './pages/ShoppingList';
+import { Friends } from './pages/Friends';
+import { LoanHistory } from './pages/LoanHistory';
+import { AdminInvites } from './pages/AdminInvites';
 
 function BootScreen() {
   return (
@@ -57,6 +60,9 @@ export default function App() {
         <Route path="decks/:id" element={<DeckEditor />} />
         <Route path="active" element={<ActiveDecks />} />
         <Route path="shopping" element={<ShoppingList />} />
+        <Route path="friends" element={<Friends />} />
+        <Route path="loans" element={<LoanHistory />} />
+        <Route path="admin/invites" element={<AdminInvites />} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Route>
     </Routes>

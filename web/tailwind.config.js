@@ -25,6 +25,14 @@ export default {
           DEFAULT: '#35e08a',
           dim: '#1f8a55',
         },
+        loan: {
+          DEFAULT: '#3b82f6',
+          dim: '#1e4a8c',
+        },
+        borrow: {
+          DEFAULT: '#a855f7',
+          dim: '#6b21a8',
+        },
         ink: '#d3eef2',
         muted: '#6f909b',
         line: '#1c3b4a',

@@ -9,11 +9,13 @@ export function Filters({
   onChange,
   sets,
   cardTypes = CARD_TYPES,
+  showStatusColor = false,
 }: {
   filters: CardFilters;
   onChange: (next: CardFilters) => void;
   sets: SetInfo[];
   cardTypes?: string[];
+  showStatusColor?: boolean;
 }) {
   const set = (patch: Partial<CardFilters>) => {
     const next: CardFilters = { ...filters, offset: 0, ...patch };
@@ -80,9 +82,30 @@ export function Filters({
           onChange={(e) => set({ cost: e.target.value })}
         />
       </Field>
+      {showStatusColor && (
+        <Field label="Estado">
+          <select
+            className="hud-input w-36"
+            value={filters.status_color ?? ''}
+            onChange={(e) => set({ status_color: e.target.value })}
+          >
+            <option value="">Todos</option>
+            <option value="green">Verde · colección</option>
+            <option value="yellow">Amarillo · mixto</option>
+            <option value="red">Rojo · en decks</option>
+          </select>
+        </Field>
+      )}
       <button
         type="button"
-        onClick={() => onChange({ limit: filters.limit, offset: 0 })}
+        onClick={() =>
+          onChange({
+            limit: filters.limit,
+            offset: 0,
+            ...(filters.owned_only ? { owned_only: filters.owned_only } : {}),
+            ...(filters.group_variants ? { group_variants: filters.group_variants } : {}),
+          })
+        }
         className="border border-line px-3 py-2 font-display text-[11px] uppercase tracking-[0.16em] text-muted hover:border-alert/40 hover:text-alert"
       >
         Reset

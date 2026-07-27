@@ -157,3 +157,85 @@ export interface CardLocation {
   box: number;
   decks: { deckId: number; name: string; qty: number }[];
 }
+
+export type StatusColor = 'green' | 'yellow' | 'red';
+
+export interface LoanPartyQty {
+  userId: number;
+  username: string;
+  qty: number;
+  loanId: number;
+}
+
+export interface CardStatusBreakdown {
+  productId: string;
+  owned: number;
+  box: number;
+  decks: { deckId: number; name: string; qty: number }[];
+  lentOut: LoanPartyQty[];
+  borrowedIn: LoanPartyQty[];
+  statusColor: StatusColor;
+  displayQty: number;
+  ownTotal: number;
+}
+
+export interface Friendship {
+  id: number;
+  status: 'pending' | 'accepted';
+  requestedBy: number;
+  otherUserId: number;
+  otherUsername: string;
+  isIncoming: boolean;
+  isOutgoing: boolean;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface LoanHistoryEntry {
+  id: number;
+  type: string;
+  loanId: number | null;
+  fromUserId: number;
+  fromUsername: string;
+  toUserId: number;
+  toUsername: string;
+  items: { productId: string; quantity: number }[];
+  deckImpacts: { deckId: number; name: string }[];
+  direction: string;
+  createdAt: number;
+}
+
+export interface OpenLoan {
+  id: number;
+  lenderId: number;
+  lenderUsername: string;
+  borrowerId: number;
+  borrowerUsername: string;
+  status: string;
+  createdAt: number;
+  updatedAt: number;
+  items: { productId: string; quantity: number }[];
+}
+
+export interface CardRequest {
+  id: number;
+  fromUserId: number;
+  fromUsername: string;
+  toUserId: number;
+  toUsername: string;
+  productId: string;
+  quantity: number;
+  status: string;
+  createdAt: number;
+  direction: 'incoming' | 'outgoing';
+}
+
+export interface InviteCode {
+  id: number;
+  code: string;
+  createdBy: number | null;
+  usedBy: number | null;
+  usedAt: number | null;
+  createdAt: number;
+  used: boolean;
+}

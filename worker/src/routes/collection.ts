@@ -5,6 +5,7 @@ import { getDb } from '../db/client';
 import { cards, collectionItems } from '../db/schema';
 import { serializeCard } from './cards';
 import { readJson } from '../util/json';
+import { getCollectionStatus } from '../services/loans';
 
 export const collectionRoutes = new Hono<AppEnv>()
   // GET /api/collection — owned quantities keyed by product_id
@@ -19,6 +20,14 @@ export const collectionRoutes = new Hono<AppEnv>()
     const map: Record<string, number> = {};
     for (const r of rows) map[r.productId] = r.quantity;
     return c.json({ data: map });
+  })
+
+  // GET /api/collection/status — location + loan breakdown per printing
+  .get('/status', async (c) => {
+    const db = getDb(c.env);
+    const userId = c.get('userId')!;
+    const data = await getCollectionStatus(db, userId);
+    return c.json({ data });
   })
 
   // GET /api/collection/cards — owned cards with full data + quantity

@@ -7,7 +7,10 @@ export interface Env {
    * Set via `wrangler secret put APP_PASSWORD`. May be removed after bootstrap.
    */
   APP_PASSWORD?: string;
-  /** Shared invite code for self-registration. Set via `wrangler secret put REGISTRATION_CODE`. */
+  /**
+   * Legacy shared invite (unused for registration after one-shot invite_codes).
+   * Kept optional for backwards-compatible env; prefer Admin → Invites.
+   */
   REGISTRATION_CODE?: string;
   /** Set via `wrangler secret put JWT_SECRET`. */
   JWT_SECRET: string;

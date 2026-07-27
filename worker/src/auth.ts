@@ -18,6 +18,12 @@ import {
   validatePassword,
   validateUsername,
 } from './services/users';
+import {
+  findUnusedInviteCode,
+  generateInviteCodes,
+  hasUnusedInviteCodes,
+  markInviteUsed,
+} from './services/invites';
 
 export type AppEnv = { Bindings: Env; Variables: Vars };
 
@@ -79,9 +85,10 @@ export const authRoutes = new Hono<AppEnv>()
   .get('/setup-status', async (c) => {
     const db = getDb(c.env);
     const bootstrapNeeded = await needsBootstrap(db);
+    const invitesOpen = await hasUnusedInviteCodes(db);
     return c.json({
       needsBootstrap: bootstrapNeeded,
-      registrationOpen: !bootstrapNeeded && !!c.env.REGISTRATION_CODE,
+      registrationOpen: !bootstrapNeeded && invitesOpen,
     });
   })
 
@@ -125,6 +132,8 @@ export const authRoutes = new Hono<AppEnv>()
       }
 
       const user = await completeBootstrap(db, pending, { username, password });
+      // Seed one-shot invites so registration can open without a reusable env secret.
+      await generateInviteCodes(db, user.id, 5);
       const session = await issueToken(c.env, user);
       return c.json({ ...session, user: toPublicUser(user) });
     } catch (err) {
@@ -141,13 +150,15 @@ export const authRoutes = new Hono<AppEnv>()
     if (await needsBootstrap(db)) {
       return c.json({ error: 'Bootstrap required first' }, 409);
     }
-    const invite = c.env.REGISTRATION_CODE;
-    if (!invite) {
-      return c.json({ error: 'Registration is disabled' }, 403);
-    }
 
     const body = await readJson<{ username: string; password: string; inviteCode: string }>(c);
-    if (!body.inviteCode || !timingSafeEqual(body.inviteCode, invite)) {
+    const inviteCode = typeof body.inviteCode === 'string' ? body.inviteCode.trim() : '';
+    if (!inviteCode) {
+      return c.json({ error: 'Invalid invite code' }, 401);
+    }
+
+    const invite = await findUnusedInviteCode(db, inviteCode);
+    if (!invite) {
       return c.json({ error: 'Invalid invite code' }, 401);
     }
 
@@ -169,6 +180,8 @@ export const authRoutes = new Hono<AppEnv>()
     }
 
     const user = await createUser(db, { username, password, isAdmin: false });
+    await markInviteUsed(db, invite.id, user.id);
+
     const session = await issueToken(c.env, user);
     return c.json({ ...session, user: toPublicUser(user) }, 201);
   })

@@ -1,10 +1,13 @@
+import { useState } from 'react';
+import { CardImage } from '../components/CardTile';
 import { Panel, StatusBadge } from '../components/hud';
-import { useShopping } from '../lib/queries';
+import { useShopping, type ShoppingRow } from '../lib/queries';
 
 export function ShoppingList() {
   const shopping = useShopping();
   const rows = shopping.data ?? [];
   const totalMissing = rows.reduce((s, r) => s + r.missing, 0);
+  const [preview, setPreview] = useState<ShoppingRow | null>(null);
 
   return (
     <div className="space-y-4">
@@ -38,7 +41,20 @@ export function ShoppingList() {
 
       {rows.length > 0 && (
         <Panel bodyClassName="p-0">
-          <div className="overflow-auto">
+          <div className="relative overflow-auto">
+            <div className="pointer-events-none absolute right-0 top-0 z-[40] w-44 sm:w-52">
+              {preview && (
+                <div
+                  key={preview.cardNumber}
+                  className="animate-card-preview-in border border-hud/50 bg-void p-1 shadow-hud-strong"
+                >
+                  <div className="aspect-[5/7] w-full overflow-hidden">
+                    <CardImage card={preview} width={500} />
+                  </div>
+                  <div className="px-1 py-1 font-mono text-[10px] text-muted">{preview.cardNumber}</div>
+                </div>
+              )}
+            </div>
             <table className="w-full font-mono text-[12px]">
               <thead>
                 <tr className="border-b border-line text-left text-muted">
@@ -52,7 +68,12 @@ export function ShoppingList() {
               </thead>
               <tbody>
                 {rows.map((r) => (
-                  <tr key={r.cardNumber} className="border-b border-line/50">
+                  <tr
+                    key={r.cardNumber}
+                    className="border-b border-line/50 transition-colors hover:bg-hud/5"
+                    onMouseEnter={() => setPreview(r)}
+                    onMouseLeave={() => setPreview(null)}
+                  >
                     <td className="p-2 text-ink">{r.name}</td>
                     <td className="px-3 text-muted">{r.cardNumber}</td>
                     <td className="px-3 text-hud">{r.owned}</td>

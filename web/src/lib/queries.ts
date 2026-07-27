@@ -1,11 +1,23 @@
-import { useMutation, useInfiniteQuery, useQuery, useQueryClient } from '@tanstack/react-query';
+import {
+  useMutation,
+  useInfiniteQuery,
+  useQuery,
+  useQueryClient,
+  type QueryClient,
+} from '@tanstack/react-query';
 import { api } from './api';
 import type {
   ActivationPlan,
   CardLocation,
+  CardRequest,
+  CardStatusBreakdown,
   CatalogStatus,
   DeckDetail,
   DeckSummary,
+  Friendship,
+  InviteCode,
+  LoanHistoryEntry,
+  OpenLoan,
   Paginated,
   PullPreference,
   SetInfo,
@@ -24,8 +36,21 @@ export interface CardFilters {
   level?: string;
   owned_only?: string;
   group_variants?: string;
+  status_color?: string;
   limit?: number;
   offset?: number;
+}
+
+function invalidateCollectionSideEffects(qc: QueryClient) {
+  qc.invalidateQueries({ queryKey: ['collection'] });
+  qc.invalidateQueries({ queryKey: ['collection-status'] });
+  qc.invalidateQueries({ queryKey: ['cards'] });
+  qc.invalidateQueries({ queryKey: ['decks'] });
+  qc.invalidateQueries({ queryKey: ['deck'] });
+  qc.invalidateQueries({ queryKey: ['locations'] });
+  qc.invalidateQueries({ queryKey: ['shopping'] });
+  qc.invalidateQueries({ queryKey: ['loans'] });
+  qc.invalidateQueries({ queryKey: ['friend-collection'] });
 }
 
 function qs(params: Record<string, unknown>): string {
@@ -72,6 +97,14 @@ export function useCollection() {
   });
 }
 
+export function useCollectionStatus() {
+  return useQuery({
+    queryKey: ['collection-status'],
+    queryFn: () =>
+      api.get<{ data: Record<string, CardStatusBreakdown> }>('/collection/status').then((r) => r.data),
+  });
+}
+
 export function useSetCollection() {
   const qc = useQueryClient();
   return useMutation({
@@ -80,12 +113,7 @@ export function useSetCollection() {
         quantity,
       }),
     onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ['collection'] });
-      qc.invalidateQueries({ queryKey: ['cards'] });
-      qc.invalidateQueries({ queryKey: ['decks'] });
-      qc.invalidateQueries({ queryKey: ['deck'] });
-      qc.invalidateQueries({ queryKey: ['locations'] });
-      qc.invalidateQueries({ queryKey: ['shopping'] });
+      invalidateCollectionSideEffects(qc);
     },
   });
 }
@@ -191,6 +219,7 @@ export function useActivate() {
       qc.invalidateQueries({ queryKey: ['decks'] });
       qc.invalidateQueries({ queryKey: ['deck'] });
       qc.invalidateQueries({ queryKey: ['locations'] });
+      qc.invalidateQueries({ queryKey: ['collection-status'] });
     },
   });
 }
@@ -203,6 +232,7 @@ export function useDeactivate() {
       qc.invalidateQueries({ queryKey: ['decks'] });
       qc.invalidateQueries({ queryKey: ['deck'] });
       qc.invalidateQueries({ queryKey: ['locations'] });
+      qc.invalidateQueries({ queryKey: ['collection-status'] });
     },
   });
 }
@@ -210,6 +240,7 @@ export function useDeactivate() {
 export interface ShoppingRow {
   cardNumber: string;
   name: string;
+  imageUrl: string | null;
   owned: number;
   maxRequired: number;
   missing: number;
@@ -256,6 +287,7 @@ export function useSetLocation() {
       qc.invalidateQueries({ queryKey: ['locations'] });
       qc.invalidateQueries({ queryKey: ['decks'] });
       qc.invalidateQueries({ queryKey: ['deck'] });
+      qc.invalidateQueries({ queryKey: ['collection-status'] });
     },
   });
 }
@@ -272,5 +304,171 @@ export function useSyncCatalog() {
       qc.invalidateQueries({ queryKey: ['sets'] });
       qc.invalidateQueries({ queryKey: ['cards'] });
     },
+  });
+}
+
+export function useFriends() {
+  return useQuery({
+    queryKey: ['friends'],
+    queryFn: () => api.get<{ data: Friendship[] }>('/friends').then((r) => r.data),
+  });
+}
+
+export function useSearchUsers(q: string) {
+  const query = q.trim();
+  return useQuery({
+    queryKey: ['users-search', query],
+    enabled: query.length >= 1,
+    queryFn: () =>
+      api
+        .get<{ data: { id: number; username: string; friendshipStatus: string | null; friendshipId: number | null }[] }>(
+          `/friends/search${qs({ q: query })}`,
+        )
+        .then((r) => r.data),
+  });
+}
+
+export function useRequestFriend() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (userId: number) => api.post<{ data: Friendship }>('/friends/request', { userId }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['friends'] });
+      qc.invalidateQueries({ queryKey: ['users-search'] });
+    },
+  });
+}
+
+export function useAcceptFriend() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: number) => api.post<{ data: Friendship }>(`/friends/${id}/accept`),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['friends'] }),
+  });
+}
+
+export function useRemoveFriend() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: number) => api.del(`/friends/${id}`),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['friends'] });
+      qc.invalidateQueries({ queryKey: ['users-search'] });
+    },
+  });
+}
+
+export function useFriendCollection(friendUserId: number | null) {
+  return useQuery({
+    queryKey: ['friend-collection', friendUserId],
+    enabled: friendUserId != null,
+    queryFn: () =>
+      api
+        .get<{
+          data: {
+            user: { id: number; username: string };
+            collection: Record<string, number>;
+            status: Record<string, CardStatusBreakdown>;
+            cards: Card[];
+          };
+        }>(`/friends/${friendUserId}/collection`)
+        .then((r) => r.data),
+  });
+}
+
+export function useOpenLoans() {
+  return useQuery({
+    queryKey: ['loans', 'open'],
+    queryFn: () => api.get<{ data: OpenLoan[] }>('/loans/open').then((r) => r.data),
+  });
+}
+
+export function useLoanHistory() {
+  return useQuery({
+    queryKey: ['loans', 'history'],
+    queryFn: () => api.get<{ data: LoanHistoryEntry[] }>('/loans/history').then((r) => r.data),
+  });
+}
+
+export function useCardRequests() {
+  return useQuery({
+    queryKey: ['loans', 'requests'],
+    queryFn: () => api.get<{ data: CardRequest[] }>('/loans/requests').then((r) => r.data),
+  });
+}
+
+export function useCreateLoan() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (body: { borrowerId: number; items: { productId: string; quantity: number }[] }) =>
+      api.post('/loans', body),
+    onSuccess: () => invalidateCollectionSideEffects(qc),
+  });
+}
+
+export function useReturnLoan() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({
+      loanId,
+      items,
+    }: {
+      loanId: number;
+      items: { productId: string; quantity: number }[];
+    }) => api.post(`/loans/${loanId}/returns`, { items }),
+    onSuccess: () => invalidateCollectionSideEffects(qc),
+  });
+}
+
+export function useCreateCardRequest() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (body: { toUserId: number; productId: string; quantity: number }) =>
+      api.post('/loans/requests', body),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['loans', 'requests'] }),
+  });
+}
+
+export function useAcceptCardRequest() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: number) => api.post(`/loans/requests/${id}/accept`),
+    onSuccess: () => {
+      invalidateCollectionSideEffects(qc);
+      qc.invalidateQueries({ queryKey: ['loans', 'requests'] });
+    },
+  });
+}
+
+export function useRejectCardRequest() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: number) => api.post(`/loans/requests/${id}/reject`),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['loans', 'requests'] }),
+  });
+}
+
+export function useCreateReturnRequest() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (body: { loanId: number; productId: string; quantity: number }) =>
+      api.post('/loans/return-requests', body),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['loans'] }),
+  });
+}
+
+export function useInviteCodes() {
+  return useQuery({
+    queryKey: ['admin', 'invite-codes'],
+    queryFn: () => api.get<{ data: InviteCode[] }>('/admin/invite-codes').then((r) => r.data),
+  });
+}
+
+export function useGenerateInviteCodes() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (count: number) =>
+      api.post<{ data: { codes: string[] } }>('/admin/invite-codes', { count }).then((r) => r.data),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['admin', 'invite-codes'] }),
   });
 }

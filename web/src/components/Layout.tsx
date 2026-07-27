@@ -10,6 +10,8 @@ const NAV = [
   { to: '/decks', label: 'Decks' },
   { to: '/active', label: 'Activos' },
   { to: '/shopping', label: 'Compra' },
+  { to: '/friends', label: 'Amigos' },
+  { to: '/loans', label: 'Préstamos' },
 ];
 
 export function Layout() {
@@ -71,15 +73,29 @@ export function Layout() {
               CARDS <span className="text-hud">{status.data?.cardCount ?? '----'}</span>
             </span>
             {user?.isAdmin && (
-              <button
-                type="button"
-                onClick={() => void runSync()}
-                disabled={sync.isPending}
-                className="border border-hud/40 px-2 py-0.5 uppercase tracking-[0.16em] text-hud hover:bg-hud/10 disabled:opacity-40"
-                title="Descargar catálogo desde gcg-api"
-              >
-                {sync.isPending ? 'Sync…' : 'Sync'}
-              </button>
+              <>
+                <NavLink
+                  to="/admin/invites"
+                  className={({ isActive }) =>
+                    `border px-2 py-0.5 uppercase tracking-[0.16em] ${
+                      isActive
+                        ? 'border-amber text-amber'
+                        : 'border-amber/40 text-amber hover:bg-amber/10'
+                    }`
+                  }
+                >
+                  Invites
+                </NavLink>
+                <button
+                  type="button"
+                  onClick={() => void runSync()}
+                  disabled={sync.isPending}
+                  className="border border-hud/40 px-2 py-0.5 uppercase tracking-[0.16em] text-hud hover:bg-hud/10 disabled:opacity-40"
+                  title="Descargar catálogo desde gcg-api"
+                >
+                  {sync.isPending ? 'Sync…' : 'Sync'}
+                </button>
+              </>
             )}
             <span className="tabular-nums text-ink">{clock}</span>
             <span className="flex items-center gap-1 text-ok">

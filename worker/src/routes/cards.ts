@@ -1,8 +1,9 @@
 import { Hono } from 'hono';
-import { and, asc, eq, gt, inArray, like, ne, or, sql, count, isNull } from 'drizzle-orm';
+import { and, asc, eq, inArray, like, ne, or, sql, count, isNull } from 'drizzle-orm';
 import type { AppEnv } from '../auth';
 import { getDb } from '../db/client';
-import { cards, collectionItems, meta, type CardRow } from '../db/schema';
+import { cards, meta, type CardRow } from '../db/schema';
+import { getProductIdsByStatusColor, getVisibleCollectionProductIds } from '../services/loans';
 
 export const cardsRoutes = new Hono<AppEnv>()
   // GET /api/cards — list/filter with pagination
@@ -10,6 +11,9 @@ export const cardsRoutes = new Hono<AppEnv>()
     const db = getDb(c.env);
     const q = c.req.query();
     const groupVariants = q.group_variants === '1' || q.group_variants === 'true';
+    const statusColor = q.status_color === 'green' || q.status_color === 'yellow' || q.status_color === 'red'
+      ? q.status_color
+      : null;
 
     const conds = [];
     if (groupVariants) {
@@ -41,30 +45,27 @@ export const cardsRoutes = new Hono<AppEnv>()
       );
     }
     if (q.effect) conds.push(like(sql`lower(${cards.effect})`, `%${q.effect.toLowerCase()}%`));
-    if (q.owned_only === '1' || q.owned_only === 'true') {
+    if (q.owned_only === '1' || q.owned_only === 'true' || statusColor) {
       const userId = c.get('userId')!;
-      if (groupVariants) {
-        // Include the card identity if ANY printing is owned.
+      const visibleIds = statusColor
+        ? await getProductIdsByStatusColor(db, userId, statusColor)
+        : await getVisibleCollectionProductIds(db, userId);
+      if (visibleIds.length === 0) {
+        conds.push(sql`1 = 0`);
+      } else if (groupVariants) {
         conds.push(
           sql`exists (
             select 1
-            from collection_items ci
-            inner join cards owned_card on owned_card.product_id = ci.product_id
-            where ci.user_id = ${userId}
-              and ci.quantity > 0
-              and owned_card.card_number = ${cards.cardNumber}
+            from cards owned_card
+            where owned_card.card_number = ${cards.cardNumber}
+              and owned_card.product_id in (${sql.join(
+                visibleIds.map((id) => sql`${id}`),
+                sql`, `,
+              )})
           )`,
         );
       } else {
-        conds.push(
-          inArray(
-            cards.productId,
-            db
-              .select({ id: collectionItems.productId })
-              .from(collectionItems)
-              .where(and(eq(collectionItems.userId, userId), gt(collectionItems.quantity, 0))),
-          ),
-        );
+        conds.push(inArray(cards.productId, visibleIds));
       }
     }
     for (const [key, col] of [

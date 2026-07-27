@@ -418,6 +418,18 @@ function DeckCardTile({
     >
       <button
         type="button"
+        className="absolute right-0.5 top-0.5 z-10 flex h-6 w-6 items-center justify-center border border-alert/50 bg-void/90 font-mono text-base leading-none text-alert shadow transition hover:border-alert hover:bg-alert/20"
+        title="Quitar del deck"
+        aria-label={`Quitar ${entry.card?.name ?? entry.cardNumber} del deck`}
+        onClick={(e) => {
+          e.stopPropagation();
+          onSet(entry.cardNumber, 0);
+        }}
+      >
+        ×
+      </button>
+      <button
+        type="button"
         className="relative block aspect-[5/7] w-full overflow-hidden outline-none focus:shadow-hud"
         title={entry.card?.name ?? entry.cardNumber}
         aria-label={`Vista previa de ${entry.card?.name ?? entry.cardNumber}`}

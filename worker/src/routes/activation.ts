@@ -135,6 +135,7 @@ export const activationRoutes = new Hono<AppEnv>()
         return {
           cardNumber,
           name: card?.name ?? cardNumber,
+          imageUrl: card?.imageUrl ?? null,
           owned: have,
           maxRequired: rec.maxRequired,
           missing: Math.max(0, rec.maxRequired - have),

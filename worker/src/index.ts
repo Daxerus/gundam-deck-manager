@@ -5,6 +5,8 @@ import { collectionRoutes } from './routes/collection';
 import { decksRoutes } from './routes/decks';
 import { activationRoutes } from './routes/activation';
 import { syncRoutes } from './routes/sync';
+import { friendsRoutes } from './routes/friends';
+import { loansRoutes } from './routes/loans';
 
 const app = new Hono<AppEnv>();
 
@@ -21,6 +23,8 @@ api.route('/', cardsRoutes); // /cards, /cards/:id, /sets, /status
 api.route('/collection', collectionRoutes);
 api.route('/', activationRoutes); // /decks/:id/activate|activation-plan|deactivate, /locations
 api.route('/decks', decksRoutes); // CRUD: /, /:id, /:id/cards
+api.route('/friends', friendsRoutes);
+api.route('/loans', loansRoutes);
 api.route('/admin', syncRoutes);
 app.route('/api', api);
 

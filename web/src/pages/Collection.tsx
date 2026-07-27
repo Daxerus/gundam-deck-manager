@@ -3,7 +3,15 @@ import { Panel } from '../components/hud';
 import { Filters } from '../components/Filters';
 import { CardTile } from '../components/CardTile';
 import { CardDetailModal } from '../components/CardDetailModal';
-import { useCollection, useInfiniteCards, useSets, useSetCollection, type CardFilters } from '../lib/queries';
+import { ReturnLoanDialog } from '../components/ReturnLoanDialog';
+import {
+  useCollection,
+  useCollectionStatus,
+  useInfiniteCards,
+  useSets,
+  useSetCollection,
+  type CardFilters,
+} from '../lib/queries';
 import { useLoadMoreOnScroll } from '../lib/useLoadMoreOnScroll';
 import type { Card } from '../lib/types';
 
@@ -15,16 +23,24 @@ export function Collection() {
     owned_only: '1',
   });
   const [detail, setDetail] = useState<Card | null>(null);
+  const [returnDlg, setReturnDlg] = useState<{
+    loanId: number;
+    productId: string;
+    maxQty: number;
+    username: string;
+  } | null>(null);
 
   const sets = useSets();
   const cards = useInfiniteCards(filters, PAGE);
   const collection = useCollection();
+  const statusMap = useCollectionStatus();
   const setColl = useSetCollection();
 
   const total = cards.data?.pages[0]?._meta.total ?? 0;
   const items = cards.data?.pages.flatMap((page) => page.data) ?? [];
   const owned = (pid: string) => collection.data?.[pid] ?? 0;
-  const totalCopies = Object.values(collection.data ?? {}).reduce((s, n) => s + n, 0);
+  const status = (pid: string) => statusMap.data?.[pid];
+  const totalCopies = Object.values(statusMap.data ?? {}).reduce((s, st) => s + st.displayQty, 0);
 
   const loadMoreRef = useLoadMoreOnScroll({
     hasNextPage: !!cards.hasNextPage,
@@ -43,7 +59,12 @@ export function Collection() {
         title="My Collection // Box"
         subtitle={`${total} cartas distintas · ${totalCopies} copias`}
       >
-        <Filters filters={filters} onChange={updateFilters} sets={sets.data ?? []} />
+        <Filters
+          filters={filters}
+          onChange={updateFilters}
+          sets={sets.data ?? []}
+          showStatusColor
+        />
       </Panel>
 
       {cards.isLoading && <p className="font-mono text-sm text-muted">Cargando colección…</p>}
@@ -62,8 +83,12 @@ export function Collection() {
             key={card.productId}
             card={card}
             owned={owned(card.productId)}
+            status={status(card.productId)}
             onChangeOwned={(qty) => setColl.mutate({ productId: card.productId, quantity: qty })}
             onClick={() => setDetail(card)}
+            onReturnLoan={(loanId, productId, maxQty, username) =>
+              setReturnDlg({ loanId, productId, maxQty, username })
+            }
           />
         ))}
         <div ref={loadMoreRef} className="col-span-full h-1" />
@@ -76,6 +101,12 @@ export function Collection() {
       )}
 
       {detail && <CardDetailModal card={detail} onClose={() => setDetail(null)} />}
+      {returnDlg && (
+        <ReturnLoanDialog
+          {...returnDlg}
+          onClose={() => setReturnDlg(null)}
+        />
+      )}
     </div>
   );
 }

@@ -148,8 +148,171 @@ export const meta = sqliteTable('meta', {
   value: text('value'),
 });
 
+/** Bidirectional friendship (user_a < user_b for uniqueness). */
+export const friendships = sqliteTable(
+  'friendships',
+  {
+    id: integer('id').primaryKey({ autoIncrement: true }),
+    userA: integer('user_a')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    userB: integer('user_b')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    status: text('status').notNull().default('pending'), // pending | accepted
+    requestedBy: integer('requested_by')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    createdAt: integer('created_at').notNull().default(sql`(unixepoch())`),
+    updatedAt: integer('updated_at').notNull().default(sql`(unixepoch())`),
+  },
+  (t) => ({
+    uniqPair: uniqueIndex('uniq_friendship_pair').on(t.userA, t.userB),
+    byA: index('idx_friendships_user_a').on(t.userA),
+    byB: index('idx_friendships_user_b').on(t.userB),
+  }),
+);
+
+/** Open or closed loan between two users. */
+export const loans = sqliteTable(
+  'loans',
+  {
+    id: integer('id').primaryKey({ autoIncrement: true }),
+    lenderId: integer('lender_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    borrowerId: integer('borrower_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    status: text('status').notNull().default('open'), // open | closed
+    createdAt: integer('created_at').notNull().default(sql`(unixepoch())`),
+    updatedAt: integer('updated_at').notNull().default(sql`(unixepoch())`),
+  },
+  (t) => ({
+    byLender: index('idx_loans_lender').on(t.lenderId),
+    byBorrower: index('idx_loans_borrower').on(t.borrowerId),
+    byPairStatus: index('idx_loans_pair_status').on(t.lenderId, t.borrowerId, t.status),
+  }),
+);
+
+/** Outstanding quantities still out on a loan, per printing. */
+export const loanItems = sqliteTable(
+  'loan_items',
+  {
+    id: integer('id').primaryKey({ autoIncrement: true }),
+    loanId: integer('loan_id')
+      .notNull()
+      .references(() => loans.id, { onDelete: 'cascade' }),
+    productId: text('product_id')
+      .notNull()
+      .references(() => cards.productId, { onDelete: 'cascade' }),
+    quantity: integer('quantity').notNull().default(0),
+  },
+  (t) => ({
+    uniq: uniqueIndex('uniq_loan_item').on(t.loanId, t.productId),
+    byProduct: index('idx_loan_items_product').on(t.productId),
+  }),
+);
+
+/** Immutable history of lend/return events. */
+export const loanTransactions = sqliteTable(
+  'loan_transactions',
+  {
+    id: integer('id').primaryKey({ autoIncrement: true }),
+    type: text('type').notNull(), // lend | return
+    loanId: integer('loan_id').references(() => loans.id, { onDelete: 'set null' }),
+    fromUserId: integer('from_user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    toUserId: integer('to_user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    itemsJson: text('items_json').notNull(),
+    deckImpactsJson: text('deck_impacts_json').notNull().default('[]'),
+    createdAt: integer('created_at').notNull().default(sql`(unixepoch())`),
+  },
+  (t) => ({
+    byFrom: index('idx_loan_tx_from').on(t.fromUserId),
+    byTo: index('idx_loan_tx_to').on(t.toUserId),
+    byCreated: index('idx_loan_tx_created').on(t.createdAt),
+  }),
+);
+
+/** Request to borrow a card from a friend. */
+export const cardRequests = sqliteTable(
+  'card_requests',
+  {
+    id: integer('id').primaryKey({ autoIncrement: true }),
+    fromUserId: integer('from_user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    toUserId: integer('to_user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    productId: text('product_id')
+      .notNull()
+      .references(() => cards.productId, { onDelete: 'cascade' }),
+    quantity: integer('quantity').notNull().default(1),
+    status: text('status').notNull().default('pending'), // pending | accepted | rejected | cancelled
+    createdAt: integer('created_at').notNull().default(sql`(unixepoch())`),
+    updatedAt: integer('updated_at').notNull().default(sql`(unixepoch())`),
+  },
+  (t) => ({
+    byTo: index('idx_card_requests_to').on(t.toUserId, t.status),
+    byFrom: index('idx_card_requests_from').on(t.fromUserId, t.status),
+  }),
+);
+
+/** Request to return copies on an open loan. */
+export const returnRequests = sqliteTable(
+  'return_requests',
+  {
+    id: integer('id').primaryKey({ autoIncrement: true }),
+    loanId: integer('loan_id')
+      .notNull()
+      .references(() => loans.id, { onDelete: 'cascade' }),
+    requestedBy: integer('requested_by')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    productId: text('product_id')
+      .notNull()
+      .references(() => cards.productId, { onDelete: 'cascade' }),
+    quantity: integer('quantity').notNull().default(1),
+    status: text('status').notNull().default('pending'),
+    createdAt: integer('created_at').notNull().default(sql`(unixepoch())`),
+    updatedAt: integer('updated_at').notNull().default(sql`(unixepoch())`),
+  },
+  (t) => ({
+    byLoan: index('idx_return_requests_loan').on(t.loanId, t.status),
+  }),
+);
+
+/** One-shot registration invite codes. */
+export const inviteCodes = sqliteTable(
+  'invite_codes',
+  {
+    id: integer('id').primaryKey({ autoIncrement: true }),
+    code: text('code').notNull(),
+    createdBy: integer('created_by').references(() => users.id, { onDelete: 'set null' }),
+    usedBy: integer('used_by').references(() => users.id, { onDelete: 'set null' }),
+    usedAt: integer('used_at'),
+    createdAt: integer('created_at').notNull().default(sql`(unixepoch())`),
+  },
+  (t) => ({
+    uniqCode: uniqueIndex('uniq_invite_code').on(t.code),
+    byUsed: index('idx_invite_codes_unused').on(t.usedBy),
+  }),
+);
+
 export type CardRow = typeof cards.$inferSelect;
 export type UserRow = typeof users.$inferSelect;
 export type DeckRow = typeof decks.$inferSelect;
 export type DeckCardRow = typeof deckCards.$inferSelect;
 export type AllocationRow = typeof allocations.$inferSelect;
+export type FriendshipRow = typeof friendships.$inferSelect;
+export type LoanRow = typeof loans.$inferSelect;
+export type LoanItemRow = typeof loanItems.$inferSelect;
+export type LoanTransactionRow = typeof loanTransactions.$inferSelect;
+export type CardRequestRow = typeof cardRequests.$inferSelect;
+export type ReturnRequestRow = typeof returnRequests.$inferSelect;
+export type InviteCodeRow = typeof inviteCodes.$inferSelect;
