@@ -605,20 +605,3 @@ export async function listOpenLoansForUser(db: DB, userId: number) {
       .map((i) => ({ productId: i.productId, quantity: i.quantity })),
   }));
 }
-
-/** Product IDs that should appear in the collection view (owned or lent out). */
-export async function getVisibleCollectionProductIds(db: DB, userId: number): Promise<string[]> {
-  const status = await getCollectionStatus(db, userId);
-  return Object.keys(status).filter((pid) => status[pid].displayQty > 0);
-}
-
-export async function getProductIdsByStatusColor(
-  db: DB,
-  userId: number,
-  color: 'green' | 'yellow' | 'red',
-): Promise<string[]> {
-  const status = await getCollectionStatus(db, userId);
-  return Object.entries(status)
-    .filter(([, s]) => s.statusColor === color && s.displayQty > 0)
-    .map(([pid]) => pid);
-}

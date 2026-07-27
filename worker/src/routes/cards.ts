@@ -1,9 +1,49 @@
 import { Hono } from 'hono';
-import { and, asc, eq, inArray, like, ne, or, sql, count, isNull } from 'drizzle-orm';
+import { and, asc, eq, inArray, like, ne, or, sql, count, isNull, type SQL } from 'drizzle-orm';
 import type { AppEnv } from '../auth';
 import { getDb } from '../db/client';
 import { cards, meta, type CardRow } from '../db/schema';
-import { getProductIdsByStatusColor, getVisibleCollectionProductIds } from '../services/loans';
+import type { StatusColor } from '../services/cardStatus';
+
+/**
+ * Collection visibility / status-colour predicate for one printing, expressed as
+ * correlated subqueries. Materialising the product_id list instead would blow past
+ * D1's 100 bound-parameter cap for any real-sized collection.
+ * Mirrors the rules in services/cardStatus.ts.
+ */
+function collectionCondition(userId: number, statusColor: StatusColor | null, productId: SQL): SQL {
+  const owned = sql`coalesce((
+    select ci.quantity from collection_items ci
+    where ci.user_id = ${userId} and ci.product_id = ${productId}
+  ), 0)`;
+  const alloc = sql`coalesce((
+    select sum(a.quantity) from allocations a
+    inner join decks d on d.id = a.deck_id
+    where d.user_id = ${userId} and a.product_id = ${productId}
+  ), 0)`;
+  const lent = sql`coalesce((
+    select sum(li.quantity) from loan_items li
+    inner join loans l on l.id = li.loan_id
+    where l.status = 'open' and l.lender_id = ${userId} and li.product_id = ${productId}
+  ), 0)`;
+  const borrowed = sql`coalesce((
+    select sum(li.quantity) from loan_items li
+    inner join loans l on l.id = li.loan_id
+    where l.status = 'open' and l.borrower_id = ${userId} and li.product_id = ${productId}
+  ), 0)`;
+
+  const visible = sql`(${owned} + ${lent}) > 0`;
+  if (!statusColor) return visible;
+
+  const hasLoans = sql`(${lent} > 0 or ${borrowed} > 0)`;
+  if (statusColor === 'green') {
+    return sql`${visible} and not ${hasLoans} and ${alloc} = 0`;
+  }
+  if (statusColor === 'red') {
+    return sql`${visible} and not ${hasLoans} and ${owned} > 0 and ${alloc} >= ${owned}`;
+  }
+  return sql`${visible} and (${hasLoans} or (${alloc} > 0 and ${alloc} < ${owned}))`;
+}
 
 export const cardsRoutes = new Hono<AppEnv>()
   // GET /api/cards — list/filter with pagination
@@ -47,25 +87,18 @@ export const cardsRoutes = new Hono<AppEnv>()
     if (q.effect) conds.push(like(sql`lower(${cards.effect})`, `%${q.effect.toLowerCase()}%`));
     if (q.owned_only === '1' || q.owned_only === 'true' || statusColor) {
       const userId = c.get('userId')!;
-      const visibleIds = statusColor
-        ? await getProductIdsByStatusColor(db, userId, statusColor)
-        : await getVisibleCollectionProductIds(db, userId);
-      if (visibleIds.length === 0) {
-        conds.push(sql`1 = 0`);
-      } else if (groupVariants) {
+      if (groupVariants) {
+        // Include the card identity if ANY of its printings matches.
         conds.push(
           sql`exists (
             select 1
             from cards owned_card
             where owned_card.card_number = ${cards.cardNumber}
-              and owned_card.product_id in (${sql.join(
-                visibleIds.map((id) => sql`${id}`),
-                sql`, `,
-              )})
+              and ${collectionCondition(userId, statusColor, sql`owned_card.product_id`)}
           )`,
         );
       } else {
-        conds.push(inArray(cards.productId, visibleIds));
+        conds.push(collectionCondition(userId, statusColor, sql`${cards.productId}`));
       }
     }
     for (const [key, col] of [

@@ -307,6 +307,18 @@ export function useSyncCatalog() {
   });
 }
 
+export function useCard(productId: string | null) {
+  return useQuery({
+    queryKey: ['card', productId],
+    enabled: !!productId,
+    staleTime: 5 * 60_000,
+    queryFn: () =>
+      api
+        .get<{ data: Card }>(`/cards/${encodeURIComponent(productId!)}`)
+        .then((r) => r.data),
+  });
+}
+
 export function useFriends() {
   return useQuery({
     queryKey: ['friends'],

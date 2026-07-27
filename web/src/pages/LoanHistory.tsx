@@ -1,6 +1,9 @@
+import { useState, type ReactNode } from 'react';
 import { Panel } from '../components/hud';
+import { CardImage } from '../components/CardTile';
 import {
   useAcceptCardRequest,
+  useCard,
   useCardRequests,
   useCreateReturnRequest,
   useLoanHistory,
@@ -9,7 +12,6 @@ import {
   useReturnLoan,
 } from '../lib/queries';
 import { ApiError } from '../lib/api';
-import { useState } from 'react';
 import { useAuth } from '../lib/auth';
 
 export function LoanHistory() {
@@ -22,6 +24,8 @@ export function LoanHistory() {
   const returnLoan = useReturnLoan();
   const createReturnReq = useCreateReturnRequest();
   const [msg, setMsg] = useState<string | null>(null);
+  const [previewId, setPreviewId] = useState<string | null>(null);
+  const previewCard = useCard(previewId);
 
   async function run(action: () => Promise<unknown>, ok: string) {
     setMsg(null);
@@ -34,7 +38,26 @@ export function LoanHistory() {
   }
 
   return (
-    <div className="space-y-4">
+    <div className="relative space-y-4">
+      <div className="pointer-events-none absolute right-0 top-0 z-[40] w-44 sm:w-52">
+        {previewId && previewCard.data && (
+          <div
+            key={previewCard.data.productId}
+            className="animate-card-preview-in border border-hud/50 bg-void p-1 shadow-hud-strong"
+          >
+            <div className="aspect-[5/7] w-full overflow-hidden">
+              <CardImage card={previewCard.data} width={500} />
+            </div>
+            <div className="px-1 py-1 font-mono text-[10px] text-muted">
+              {previewCard.data.cardNumber}
+              {previewCard.data.productId !== previewCard.data.cardNumber
+                ? ` · ${previewCard.data.productId}`
+                : ''}
+            </div>
+          </div>
+        )}
+      </div>
+
       <Panel title="Préstamos" subtitle="Abiertos · solicitudes · historial">
         {msg && <p className="font-mono text-[12px] text-hud">{msg}</p>}
       </Panel>
@@ -48,12 +71,14 @@ export function LoanHistory() {
                   {r.direction === 'incoming' ? (
                     <>
                       <span className="text-hud">{r.fromUsername}</span> pide{' '}
-                      <span className="text-ok">x{r.quantity}</span> {r.productId}
+                      <span className="text-ok">x{r.quantity}</span>{' '}
+                      <CardRef productId={r.productId} onPreview={setPreviewId} />
                     </>
                   ) : (
                     <>
                       Pediste a <span className="text-hud">{r.toUsername}</span>{' '}
-                      <span className="text-ok">x{r.quantity}</span> {r.productId}
+                      <span className="text-ok">x{r.quantity}</span>{' '}
+                      <CardRef productId={r.productId} onPreview={setPreviewId} />
                     </>
                   )}
                 </div>
@@ -114,7 +139,7 @@ export function LoanHistory() {
                     className="flex flex-wrap items-center justify-between gap-2 font-mono text-[12px]"
                   >
                     <span>
-                      x{it.quantity} {it.productId}
+                      x{it.quantity} <CardRef productId={it.productId} onPreview={setPreviewId} />
                     </span>
                     <div className="flex gap-2">
                       <button
@@ -182,7 +207,12 @@ export function LoanHistory() {
                 {tx.fromUsername} → {tx.toUsername}
               </p>
               <p className="font-mono text-[12px] text-muted">
-                {tx.items.map((i) => `x${i.quantity} ${i.productId}`).join(' · ')}
+                {tx.items.map((i, idx) => (
+                  <span key={`${tx.id}-${i.productId}`}>
+                    {idx > 0 ? ' · ' : null}
+                    x{i.quantity} <CardRef productId={i.productId} onPreview={setPreviewId} />
+                  </span>
+                ))}
               </p>
               {tx.deckImpacts.length > 0 && (
                 <p className="mt-1 font-mono text-[12px] text-alert">
@@ -196,5 +226,23 @@ export function LoanHistory() {
         </ul>
       </Panel>
     </div>
+  );
+}
+
+function CardRef({
+  productId,
+  onPreview,
+}: {
+  productId: string;
+  onPreview: (productId: string | null) => void;
+}): ReactNode {
+  return (
+    <span
+      className="cursor-default text-hud underline decoration-hud/30 underline-offset-2 transition-colors hover:text-hud-glow hover:decoration-hud"
+      onMouseEnter={() => onPreview(productId)}
+      onMouseLeave={() => onPreview(null)}
+    >
+      {productId}
+    </span>
   );
 }
