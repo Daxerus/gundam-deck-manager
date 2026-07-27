@@ -165,9 +165,10 @@ export function MovePlanDialog({
         <h2 className="mb-3 font-display text-sm uppercase tracking-[0.2em] text-hud">// System Swap</h2>
         <TerminalLog
           lines={lines}
-          intervalMs={45}
-          characterIntervalMs={8}
+          intervalMs={30}
+          characterIntervalMs={2}
           onDone={() => setRevealed(true)}
+          className="scrollbar-hidden h-40 overflow-y-auto"
         />
 
         <label className="mt-4 flex cursor-pointer items-start gap-3 border border-line/60 bg-void/40 px-3 py-2">

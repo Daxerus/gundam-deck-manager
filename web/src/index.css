@@ -45,6 +45,17 @@
   }
 }
 
+@layer utilities {
+  .scrollbar-hidden {
+    -ms-overflow-style: none;
+    scrollbar-width: none;
+  }
+
+  .scrollbar-hidden::-webkit-scrollbar {
+    display: none;
+  }
+}
+
 @layer components {
   /* Angular beveled HUD frame via clip-path */
   .hud-clip {
