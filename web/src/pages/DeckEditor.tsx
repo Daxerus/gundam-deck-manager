@@ -15,6 +15,8 @@ import {
 import { useLoadMoreOnScroll } from '../lib/useLoadMoreOnScroll';
 import { MAIN_DECK_SIZE, RESOURCE_DECK_SIZE, validateDeckDraft } from '../lib/rules';
 import { colorClasses } from '../lib/colors';
+import { parseDeckText, formatDeckText } from '../lib/deckImport';
+import { api } from '../lib/api';
 import type { Card, DeckCardEntry, DeckValidation } from '../lib/types';
 
 export function DeckEditor() {
@@ -32,6 +34,8 @@ export function DeckEditor() {
   const [draftQty, setDraftQty] = useState<Map<string, number>>(new Map());
   const [cardMeta, setCardMeta] = useState<Map<string, Card>>(new Map());
   const [dirty, setDirty] = useState(false);
+  const [importOpen, setImportOpen] = useState(false);
+  const [exportOpen, setExportOpen] = useState(false);
   const syncedAt = useRef<number | null>(null);
 
   useEffect(() => {
@@ -153,6 +157,17 @@ export function DeckEditor() {
     navigate('/decks');
   }
 
+  function applyImport(cards: Map<string, number>, meta: Map<string, Card>) {
+    setDraftQty(new Map(cards));
+    setCardMeta((prev) => {
+      const next = new Map(prev);
+      for (const [cardNumber, card] of meta) next.set(cardNumber, card);
+      return next;
+    });
+    setDirty(true);
+    setImportOpen(false);
+  }
+
   return (
     <div className="space-y-4">
       <Panel
@@ -197,6 +212,12 @@ export function DeckEditor() {
             />
           </label>
           <div className="mb-0.5 flex flex-wrap gap-2">
+            <HudButton variant="ghost" onClick={() => setImportOpen(true)}>
+              Importar
+            </HudButton>
+            <HudButton variant="ghost" onClick={() => setExportOpen(true)}>
+              Exportar
+            </HudButton>
             <HudButton variant="ghost" onClick={discard} disabled={!dirty || saveCards.isPending}>
               Descartar
             </HudButton>
@@ -217,6 +238,20 @@ export function DeckEditor() {
           </div>
         </div>
       </Panel>
+
+      {importOpen && (
+        <ImportDeckDialog
+          onClose={() => setImportOpen(false)}
+          onApply={applyImport}
+        />
+      )}
+      {exportOpen && (
+        <ExportDeckDialog
+          title={name || d.name}
+          cards={draftEntries.map((e) => ({ cardNumber: e.cardNumber, quantity: e.quantity }))}
+          onClose={() => setExportOpen(false)}
+        />
+      )}
 
       {/* Validation summary */}
       <ValidationSummary validation={v} resourceDeckSize={d.resourceDeckSize} />
@@ -649,4 +684,144 @@ function AddCardTile({
 
 function canHoverPreview() {
   return typeof window !== 'undefined' && window.matchMedia('(hover: hover) and (pointer: fine)').matches;
+}
+
+function ImportDeckDialog({
+  onClose,
+  onApply,
+}: {
+  onClose: () => void;
+  onApply: (cards: Map<string, number>, meta: Map<string, Card>) => void;
+}) {
+  const [text, setText] = useState('');
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const parsed = useMemo(() => (text.trim() ? parseDeckText(text) : null), [text]);
+
+  async function apply() {
+    if (!parsed || parsed.cards.size === 0) {
+      setError('No se ha detectado ninguna carta válida.');
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    try {
+      const meta = new Map<string, Card>();
+      await Promise.all(
+        [...parsed.cards.keys()].map(async (cardNumber) => {
+          try {
+            const res = await api.get<{ data: Card }>(`/cards/${encodeURIComponent(cardNumber)}`);
+            meta.set(cardNumber, res.data);
+          } catch {
+            // Still import by card_number; tile will show the code until catalog resolves.
+          }
+        }),
+      );
+      onApply(parsed.cards, meta);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'No se pudo importar');
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-void/80 p-4" onClick={onClose}>
+      <div className="w-full max-w-2xl" onClick={(e) => e.stopPropagation()}>
+        <Panel title="Importar deck" subtitle="Texto plano · líneas // son comentarios">
+          <p className="mb-3 font-ui text-sm text-muted">
+            Pega una lista tipo <span className="font-mono text-ink">2x ST01-009</span>. Sustituye el
+            contenido actual del draft (aún sin guardar).
+          </p>
+          <textarea
+            className="hud-input min-h-56 w-full resize-y font-mono text-[12px] leading-relaxed"
+            placeholder={`// Main Deck\n2x ST01-009\n3x GD01-118\n4x GD01-086`}
+            value={text}
+            onChange={(e) => setText(e.target.value)}
+            spellCheck={false}
+          />
+          {parsed && (
+            <p className="mt-2 font-mono text-[12px] text-muted">
+              {parsed.distinctCards} cartas distintas · {parsed.totalCopies} copias
+              {parsed.skipped.length > 0 ? (
+                <span className="text-amber"> · {parsed.skipped.length} líneas omitidas</span>
+              ) : null}
+            </p>
+          )}
+          {parsed && parsed.skipped.length > 0 && (
+            <ul className="mt-1 max-h-24 overflow-auto font-mono text-[11px] text-amber">
+              {parsed.skipped.slice(0, 8).map((s) => (
+                <li key={`${s.line}-${s.raw}`}>
+                  L{s.line}: {s.reason} — {s.raw}
+                </li>
+              ))}
+              {parsed.skipped.length > 8 && <li>… y {parsed.skipped.length - 8} más</li>}
+            </ul>
+          )}
+          {error && <p className="mt-2 font-mono text-[12px] text-alert">{error}</p>}
+          <div className="mt-4 flex flex-wrap gap-2">
+            <HudButton variant="ok" onClick={() => void apply()} disabled={busy || !parsed?.cards.size}>
+              {busy ? 'Importando…' : 'Aplicar al deck'}
+            </HudButton>
+            <HudButton variant="ghost" onClick={onClose} disabled={busy}>
+              Cancelar
+            </HudButton>
+          </div>
+        </Panel>
+      </div>
+    </div>
+  );
+}
+
+function ExportDeckDialog({
+  title,
+  cards,
+  onClose,
+}: {
+  title: string;
+  cards: { cardNumber: string; quantity: number }[];
+  onClose: () => void;
+}) {
+  const text = useMemo(() => formatDeckText(cards, { title }), [cards, title]);
+  const [copied, setCopied] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function copy() {
+    setError(null);
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1800);
+    } catch {
+      setError('No se pudo copiar al portapapeles');
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-void/80 p-4" onClick={onClose}>
+      <div className="w-full max-w-2xl" onClick={(e) => e.stopPropagation()}>
+        <Panel title="Exportar deck" subtitle="Texto plano listo para compartir">
+          <textarea
+            className="hud-input min-h-56 w-full resize-y font-mono text-[12px] leading-relaxed"
+            value={text}
+            readOnly
+            spellCheck={false}
+            onFocus={(e) => e.currentTarget.select()}
+          />
+          <p className="mt-2 font-mono text-[12px] text-muted">
+            {cards.filter((c) => c.quantity > 0).length} cartas distintas ·{' '}
+            {cards.reduce((s, c) => s + Math.max(0, c.quantity), 0)} copias
+          </p>
+          {error && <p className="mt-2 font-mono text-[12px] text-alert">{error}</p>}
+          <div className="mt-4 flex flex-wrap gap-2">
+            <HudButton variant="ok" onClick={() => void copy()} disabled={!text.trim()}>
+              {copied ? 'Copiado' : 'Copy to clipboard'}
+            </HudButton>
+            <HudButton variant="ghost" onClick={onClose}>
+              Cerrar
+            </HudButton>
+          </div>
+        </Panel>
+      </div>
+    </div>
+  );
 }
