@@ -215,8 +215,12 @@ function matchesFriendFilters(
     const q = filters.effect.trim().toLowerCase();
     if (!(card.effect ?? '').toLowerCase().includes(q)) return false;
   }
-  if (filters.set_code && card.setCode.toLowerCase() !== filters.set_code.toLowerCase()) {
-    return false;
+  if (filters.set_code) {
+    // Mirrors the server filter in worker/src/routes/cards.ts: promos and reprints keep a
+    // card number from another set, so both the set code and the number prefix count.
+    const set = filters.set_code.toLowerCase();
+    const numberPrefix = card.cardNumber.split('-')[0]?.toLowerCase();
+    if (card.setCode.toLowerCase() !== set && numberPrefix !== set) return false;
   }
   if (filters.color && card.color !== filters.color) return false;
   if (filters.card_type && (card.cardType ?? '').toLowerCase() !== filters.card_type.toLowerCase()) {

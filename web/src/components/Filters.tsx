@@ -65,7 +65,7 @@ export function Filters({
           <option value="">Todos</option>
           {sets.map((s) => (
             <option key={s.setCode} value={s.setCode}>
-              {s.setCode} · {s.setName}
+              {s.setName ? `${s.setCode} · ${s.setName}` : s.setCode}
             </option>
           ))}
         </select>

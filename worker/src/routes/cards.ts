@@ -45,6 +45,19 @@ function collectionCondition(userId: number, statusColor: StatusColor | null, pr
   return sql`${visible} and (${hasLoans} or (${alloc} > 0 and ${alloc} < ${owned}))`;
 }
 
+/**
+ * Set filter for one printing. `set_code` comes straight from the source dataset and
+ * often disagrees with the card number prefix (promos and Deck Build Box reprints keep
+ * their original number, e.g. GD01-086_p3 sits in SC01), so a card also matches the set
+ * its number was printed under. Prefix is extracted instead of using LIKE so that `_`
+ * in a caller-supplied code cannot act as a wildcard.
+ */
+function setCondition(setCode: string): SQL {
+  const set = setCode.toLowerCase();
+  const numberPrefix = sql`lower(substr(${cards.cardNumber}, 1, instr(${cards.cardNumber}, '-') - 1))`;
+  return or(eq(sql`lower(${cards.setCode})`, set), eq(numberPrefix, set))!;
+}
+
 export const cardsRoutes = new Hono<AppEnv>()
   // GET /api/cards — list/filter with pagination
   .get('/cards', async (c) => {
@@ -67,7 +80,7 @@ export const cardsRoutes = new Hono<AppEnv>()
         )`,
       );
     }
-    if (q.set_code) conds.push(eq(sql`lower(${cards.setCode})`, q.set_code.toLowerCase()));
+    if (q.set_code) conds.push(setCondition(q.set_code));
     if (q.card_type) conds.push(eq(sql`lower(${cards.cardType})`, q.card_type.toLowerCase()));
     if (q.exclude_card_type) {
       const excluded = q.exclude_card_type.toLowerCase();
@@ -199,10 +212,24 @@ export const cardsRoutes = new Hono<AppEnv>()
   // GET /api/sets — distinct sets with counts
   .get('/sets', async (c) => {
     const db = getDb(c.env);
+    // A set_code holds several set_name values, because promos and other-product
+    // printings carry a generic label ("Promotion card", "Other Product Card") next to
+    // the real set name. Pick the most common label so the filter shows e.g.
+    // "GD05 · Freedom Ascension" rather than whichever name sorts last.
     const rows = await db
       .select({
         setCode: cards.setCode,
-        setName: sql<string>`max(${cards.setName})`,
+        // `cards.set_code` is spelled out rather than interpolated: Drizzle omits the
+        // table qualifier inside a projection, and a bare "set_code" would bind to c2,
+        // making the correlation a no-op.
+        setName: sql<string | null>`(
+          select c2.set_name
+          from cards c2
+          where c2.set_code = cards.set_code and c2.set_name is not null
+          group by c2.set_name
+          order by count(*) desc, c2.set_name asc
+          limit 1
+        )`,
         count: count(),
       })
       .from(cards)
