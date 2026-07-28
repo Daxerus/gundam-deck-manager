@@ -37,6 +37,9 @@ export interface CardFilters {
   owned_only?: string;
   group_variants?: string;
   status_color?: string;
+  source_title?: string;
+  /** Comma-separated traits; OR match (any of the selected traits). */
+  traits?: string;
   limit?: number;
   offset?: number;
 }
@@ -70,6 +73,26 @@ export function useSets() {
   return useQuery({
     queryKey: ['sets'],
     queryFn: () => api.get<{ data: SetInfo[] }>('/sets').then((r) => r.data),
+    staleTime: 5 * 60_000,
+  });
+}
+
+export function useSourceTitles() {
+  return useQuery({
+    queryKey: ['source-titles'],
+    queryFn: () =>
+      api
+        .get<{ data: { sourceTitle: string; count: number }[] }>('/source-titles')
+        .then((r) => r.data),
+    staleTime: 5 * 60_000,
+  });
+}
+
+export function useTraits() {
+  return useQuery({
+    queryKey: ['traits'],
+    queryFn: () =>
+      api.get<{ data: { trait: string; count: number }[] }>('/traits').then((r) => r.data),
     staleTime: 5 * 60_000,
   });
 }
@@ -302,6 +325,8 @@ export function useSyncCatalog() {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['status'] });
       qc.invalidateQueries({ queryKey: ['sets'] });
+      qc.invalidateQueries({ queryKey: ['source-titles'] });
+      qc.invalidateQueries({ queryKey: ['traits'] });
       qc.invalidateQueries({ queryKey: ['cards'] });
     },
   });

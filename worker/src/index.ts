@@ -19,7 +19,7 @@ app.route('/api/auth', authRoutes);
 // Everything else under /api requires a valid JWT + resolved user.
 const api = new Hono<AppEnv>();
 api.use('*', authGuard, requireUser);
-api.route('/', cardsRoutes); // /cards, /cards/:id, /sets, /status
+api.route('/', cardsRoutes); // /cards, /cards/:id, /sets, /source-titles, /traits, /status
 api.route('/collection', collectionRoutes);
 api.route('/', activationRoutes); // /decks/:id/activate|activation-plan|deactivate, /locations
 api.route('/decks', decksRoutes); // CRUD: /, /:id, /:id/cards

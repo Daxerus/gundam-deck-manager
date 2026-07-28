@@ -4,6 +4,7 @@ import { Filters } from '../components/Filters';
 import { CardTile } from '../components/CardTile';
 import { CardDetailModal } from '../components/CardDetailModal';
 import { ReturnLoanDialog } from '../components/ReturnLoanDialog';
+import { ScrollToTopButton } from '../components/ScrollToTopButton';
 import {
   useCollection,
   useCollectionStatus,
@@ -58,6 +59,7 @@ export function Collection() {
       <Panel
         title="My Collection // Box"
         subtitle={`${total} cartas distintas · ${totalCopies} copias`}
+        className="z-20"
       >
         <Filters
           filters={filters}
@@ -107,6 +109,7 @@ export function Collection() {
           onClose={() => setReturnDlg(null)}
         />
       )}
+      <ScrollToTopButton />
     </div>
   );
 }

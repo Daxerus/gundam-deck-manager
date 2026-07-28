@@ -85,6 +85,29 @@ export const cardsRoutes = new Hono<AppEnv>()
       );
     }
     if (q.effect) conds.push(like(sql`lower(${cards.effect})`, `%${q.effect.toLowerCase()}%`));
+    if (q.source_title) {
+      conds.push(eq(cards.sourceTitle, q.source_title));
+    }
+    if (q.traits) {
+      // OR semantics: card matches if it has ANY of the selected traits.
+      const selected = q.traits
+        .split(',')
+        .map((t) => t.trim())
+        .filter(Boolean);
+      if (selected.length > 0) {
+        conds.push(
+          or(
+            ...selected.map(
+              (t) =>
+                sql`exists (
+                  select 1 from json_each(${cards.traits})
+                  where lower(value) = ${t.toLowerCase()}
+                )`,
+            ),
+          )!,
+        );
+      }
+    }
     if (q.owned_only === '1' || q.owned_only === 'true' || statusColor) {
       const userId = c.get('userId')!;
       if (groupVariants) {
@@ -187,6 +210,41 @@ export const cardsRoutes = new Hono<AppEnv>()
       .orderBy(asc(cards.setCode))
       .all();
     return c.json({ data: rows });
+  })
+
+  // GET /api/source-titles — distinct series (source_title) for filters
+  .get('/source-titles', async (c) => {
+    const db = getDb(c.env);
+    const rows = await db
+      .select({
+        sourceTitle: cards.sourceTitle,
+        count: count(),
+      })
+      .from(cards)
+      .where(sql`${cards.sourceTitle} is not null and ${cards.sourceTitle} != ''`)
+      .groupBy(cards.sourceTitle)
+      .orderBy(asc(cards.sourceTitle))
+      .all();
+    return c.json({
+      data: rows.map((r) => ({
+        sourceTitle: r.sourceTitle as string,
+        count: r.count,
+      })),
+    });
+  })
+
+  // GET /api/traits — distinct traits (from JSON array) for filters
+  .get('/traits', async (c) => {
+    const result = await c.env.DB.prepare(
+      `SELECT json_each.value AS trait, COUNT(*) AS count
+       FROM cards, json_each(cards.traits)
+       WHERE cards.traits IS NOT NULL
+         AND json_each.value IS NOT NULL
+         AND json_each.value != ''
+       GROUP BY json_each.value
+       ORDER BY json_each.value`,
+    ).all<{ trait: string; count: number }>();
+    return c.json({ data: result.results ?? [] });
   })
 
   // GET /api/status — catalog + dataset info

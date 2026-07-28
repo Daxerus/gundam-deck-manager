@@ -228,6 +228,19 @@ function matchesFriendFilters(
   if (filters.status_color) {
     if (!status || status.statusColor !== filters.status_color) return false;
   }
+  if (filters.source_title && card.sourceTitle !== filters.source_title) {
+    return false;
+  }
+  if (filters.traits) {
+    const selected = filters.traits
+      .split(',')
+      .map((t) => t.trim().toLowerCase())
+      .filter(Boolean);
+    if (selected.length > 0) {
+      const cardTraits = (card.traits ?? []).map((t) => t.toLowerCase());
+      if (!selected.some((t) => cardTraits.includes(t))) return false;
+    }
+  }
   return true;
 }
 
@@ -263,6 +276,7 @@ function FriendCollectionView({
       <Panel
         title={`Colección // ${username}`}
         subtitle={`${filtered.length} cartas distintas · ${totalCopies} copias · solo lectura`}
+        className="z-20"
       >
         <div className="mb-3">
           <button

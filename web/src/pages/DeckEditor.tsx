@@ -585,6 +585,7 @@ function AddCards({
     <Panel
       title="Añadir cartas"
       subtitle={cards.data ? `${total} resultados` : '…'}
+      className="z-20"
       right={
         <div className="flex border border-line">
           <ToggleBtn

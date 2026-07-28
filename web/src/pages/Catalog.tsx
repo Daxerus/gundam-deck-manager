@@ -18,6 +18,7 @@ import { useLoadMoreOnScroll } from '../lib/useLoadMoreOnScroll';
 import { ApiError } from '../lib/api';
 import type { Card, CardStatusBreakdown } from '../lib/types';
 import { ReturnLoanDialog } from '../components/ReturnLoanDialog';
+import { ScrollToTopButton } from '../components/ScrollToTopButton';
 
 const PAGE = 60;
 
@@ -79,6 +80,7 @@ export function Catalog() {
       <Panel
         title="Collection // Database"
         subtitle={cards.data ? `${total} resultados` : 'consultando base de datos…'}
+        className="z-20"
       >
         <Filters filters={filters} onChange={updateFilters} sets={sets.data ?? []} />
       </Panel>
@@ -138,6 +140,7 @@ export function Catalog() {
 
       {detail && <CardDetailModal card={detail} onClose={() => setDetail(null)} />}
       {returnDlg && <ReturnLoanDialog {...returnDlg} onClose={() => setReturnDlg(null)} />}
+      <ScrollToTopButton />
     </div>
   );
 }
