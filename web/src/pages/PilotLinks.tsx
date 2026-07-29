@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { motion } from 'framer-motion';
 import { Panel, HudButton } from '../components/hud';
 import { Filters } from '../components/Filters';
-import { CardTile } from '../components/CardTile';
+import { CardImage, CardTile } from '../components/CardTile';
 import { CardDetailModal } from '../components/CardDetailModal';
 import { ScrollToTopButton } from '../components/ScrollToTopButton';
 import {
@@ -175,69 +175,79 @@ function PilotLinkedUnitsModal({ pilot, onClose }: { pilot: Card; onClose: () =>
           animate={{ opacity: 1, scale: 1 }}
           transition={{ duration: 0.2 }}
           onClick={(e) => e.stopPropagation()}
-          className="flex max-h-[92vh] w-full max-w-7xl flex-col overflow-hidden border border-hud/40 bg-panel/95 shadow-hud-strong"
+          className="max-h-[92vh] w-full max-w-7xl overflow-y-auto border border-hud/40 bg-panel/95 shadow-hud-strong"
         >
-          <div className="flex shrink-0 items-start justify-between gap-3 border-b border-line px-4 py-3 sm:px-6">
-            <div className="min-w-0">
-              <p className="font-display text-[10px] uppercase tracking-[0.2em] text-hud">
-                Link Targets // Units
-              </p>
-              <h2 className="truncate font-display text-xl text-ink sm:text-2xl">{pilot.name}</h2>
-              <p className="font-mono text-sm text-muted">
-                {pilot.cardNumber}
-                {traitLabel ? ` · ${traitLabel}` : ''}
-              </p>
+          <div className="grid items-start md:grid-cols-[minmax(16rem,22rem)_minmax(0,1fr)]">
+            <aside className="p-4 sm:p-6 md:sticky md:top-0">
+              <div className="mx-auto aspect-[5/7] w-full max-w-[22rem] overflow-hidden border border-hud/30 bg-void/60 shadow-hud">
+                <CardImage card={pilot} className="h-full w-full" width={700} />
+              </div>
+            </aside>
+
+            <div className="min-w-0 border-t border-line md:border-l md:border-t-0">
+              <div className="flex items-start justify-between gap-3 border-b border-line px-4 py-3 sm:px-6">
+                <div className="min-w-0">
+                  <p className="font-display text-[10px] uppercase tracking-[0.2em] text-hud">
+                    Link Targets // Units
+                  </p>
+                  <h2 className="truncate font-display text-xl text-ink sm:text-2xl">{pilot.name}</h2>
+                  <p className="font-mono text-sm text-muted">
+                    {pilot.cardNumber}
+                    {traitLabel ? ` · ${traitLabel}` : ''}
+                  </p>
+                </div>
+                <HudButton variant="ghost" className="!text-sm shrink-0" onClick={onClose}>
+                  Cerrar
+                </HudButton>
+              </div>
+
+              <div className="space-y-4 p-4 sm:p-6">
+                <Panel
+                  title="Filtros"
+                  subtitle={cards.data ? `${total} unidades con link` : 'buscando…'}
+                  className="z-20"
+                >
+                  <Filters
+                    filters={filters}
+                    onChange={updateFilters}
+                    sets={sets.data ?? []}
+                    cardTypes={['UNIT']}
+                  />
+                </Panel>
+
+                {cards.isLoading && (
+                  <p className="font-mono text-sm text-muted">Cargando unidades…</p>
+                )}
+                {cards.isError && (
+                  <p className="font-mono text-sm text-alert">Error al cargar unidades enlazadas.</p>
+                )}
+                {!cards.isLoading && !cards.isError && total === 0 && (
+                  <p className="font-mono text-sm text-muted">
+                    Ninguna unidad recibe link de este piloto.
+                  </p>
+                )}
+
+                <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">
+                  {items.map((card) => (
+                    <LinkedUnitTile
+                      key={card.cardNumber}
+                      card={card}
+                      owned={owned}
+                      cardStatus={cardStatus}
+                      onChangeOwned={(productId, quantity) => setColl.mutate({ productId, quantity })}
+                      onOpenDetail={setDetail}
+                    />
+                  ))}
+                  <div ref={loadMoreRef} className="col-span-full h-1" />
+                </div>
+
+                {!cards.isLoading && items.length > 0 && (
+                  <p className="text-center font-mono text-[10px] text-muted">
+                    {cards.isFetchingNextPage ? 'Cargando más…' : `${items.length} / ${total}`}
+                  </p>
+                )}
+              </div>
             </div>
-            <HudButton variant="ghost" className="!text-sm shrink-0" onClick={onClose}>
-              Cerrar
-            </HudButton>
-          </div>
-
-          <div className="min-h-0 flex-1 space-y-4 overflow-y-auto p-4 sm:p-6">
-            <Panel
-              title="Filtros"
-              subtitle={cards.data ? `${total} unidades con link` : 'buscando…'}
-              className="z-20"
-            >
-              <Filters
-                filters={filters}
-                onChange={updateFilters}
-                sets={sets.data ?? []}
-                cardTypes={['UNIT']}
-              />
-            </Panel>
-
-            {cards.isLoading && (
-              <p className="font-mono text-sm text-muted">Cargando unidades…</p>
-            )}
-            {cards.isError && (
-              <p className="font-mono text-sm text-alert">Error al cargar unidades enlazadas.</p>
-            )}
-            {!cards.isLoading && !cards.isError && total === 0 && (
-              <p className="font-mono text-sm text-muted">
-                Ninguna unidad recibe link de este piloto.
-              </p>
-            )}
-
-            <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6">
-              {items.map((card) => (
-                <LinkedUnitTile
-                  key={card.cardNumber}
-                  card={card}
-                  owned={owned}
-                  cardStatus={cardStatus}
-                  onChangeOwned={(productId, quantity) => setColl.mutate({ productId, quantity })}
-                  onOpenDetail={setDetail}
-                />
-              ))}
-              <div ref={loadMoreRef} className="col-span-full h-1" />
-            </div>
-
-            {!cards.isLoading && items.length > 0 && (
-              <p className="text-center font-mono text-[10px] text-muted">
-                {cards.isFetchingNextPage ? 'Cargando más…' : `${items.length} / ${total}`}
-              </p>
-            )}
           </div>
         </motion.div>
       </div>

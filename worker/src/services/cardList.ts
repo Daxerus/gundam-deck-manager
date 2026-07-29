@@ -150,7 +150,18 @@ export async function listCards(
     const excluded = q.exclude_card_type.toLowerCase();
     conds.push(or(isNull(cards.cardType), ne(sql`lower(${cards.cardType})`, excluded))!);
   }
-  if (q.color) conds.push(eq(cards.color, q.color));
+  if (q.color) {
+    // OR semantics: card matches if its color is ANY of the selected colors.
+    const selected = q.color
+      .split(',')
+      .map((c) => c.trim())
+      .filter(Boolean);
+    if (selected.length === 1) {
+      conds.push(eq(cards.color, selected[0]!));
+    } else if (selected.length > 1) {
+      conds.push(inArray(cards.color, selected));
+    }
+  }
   if (q.rarity) conds.push(eq(cards.rarity, q.rarity));
   if (q.name) {
     const search = `%${q.name.trim().toLowerCase()}%`;

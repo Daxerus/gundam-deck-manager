@@ -6,6 +6,13 @@ import { CARD_COLORS } from '../lib/colors';
 
 const CARD_TYPES = ['UNIT', 'PILOT', 'COMMAND', 'BASE', 'RESOURCE'];
 
+function parseCsv(value: string | undefined): string[] {
+  return (value ?? '')
+    .split(',')
+    .map((t) => t.trim())
+    .filter(Boolean);
+}
+
 export function Filters({
   filters,
   onChange,
@@ -30,16 +37,14 @@ export function Filters({
     onChange(next);
   };
 
-  const selectedTraits = (filters.traits ?? '')
-    .split(',')
-    .map((t) => t.trim())
-    .filter(Boolean);
+  const selectedTraits = parseCsv(filters.traits);
+  const selectedColors = parseCsv(filters.color);
 
-  const toggleTrait = (trait: string) => {
-    const next = selectedTraits.includes(trait)
-      ? selectedTraits.filter((t) => t !== trait)
-      : [...selectedTraits, trait];
-    set({ traits: next.length ? next.join(',') : '' });
+  const toggleCsv = (key: 'traits' | 'color', value: string, current: string[]) => {
+    const next = current.includes(value)
+      ? current.filter((t) => t !== value)
+      : [...current, value];
+    set({ [key]: next.length ? next.join(',') : '' });
   };
 
   return (
@@ -86,23 +91,23 @@ export function Filters({
       </Field>
       <div className="flex flex-col gap-1">
         <span className="font-display text-[9px] uppercase tracking-[0.2em] text-muted">Traits</span>
-        <TraitMultiSelect
+        <MultiSelect
           options={(traits.data ?? []).map((t) => t.trait)}
           selected={selectedTraits}
-          onToggle={toggleTrait}
+          onToggle={(trait) => toggleCsv('traits', trait, selectedTraits)}
           onClear={() => set({ traits: '' })}
         />
       </div>
-      <Field label="Color">
-        <select className="hud-input w-32" value={filters.color ?? ''} onChange={(e) => set({ color: e.target.value })}>
-          <option value="">Todos</option>
-          {CARD_COLORS.map((c) => (
-            <option key={c} value={c}>
-              {c}
-            </option>
-          ))}
-        </select>
-      </Field>
+      <div className="flex flex-col gap-1">
+        <span className="font-display text-[9px] uppercase tracking-[0.2em] text-muted">Color</span>
+        <MultiSelect
+          options={[...CARD_COLORS]}
+          selected={selectedColors}
+          onToggle={(color) => toggleCsv('color', color, selectedColors)}
+          onClear={() => set({ color: '' })}
+          widthClass="w-40"
+        />
+      </div>
       <Field label="Tipo">
         <select className="hud-input w-32" value={filters.card_type ?? ''} onChange={(e) => set({ card_type: e.target.value })}>
           <option value="">Todos</option>
@@ -154,16 +159,20 @@ export function Filters({
   );
 }
 
-function TraitMultiSelect({
+function MultiSelect({
   options,
   selected,
   onToggle,
   onClear,
+  emptyLabel = 'Sin opciones',
+  widthClass = 'w-48',
 }: {
   options: string[];
   selected: string[];
-  onToggle: (trait: string) => void;
+  onToggle: (value: string) => void;
   onClear: () => void;
+  emptyLabel?: string;
+  widthClass?: string;
 }) {
   const [open, setOpen] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
@@ -190,7 +199,7 @@ function TraitMultiSelect({
     <div ref={rootRef} className="relative">
       <button
         type="button"
-        className="hud-input flex w-48 items-center justify-between gap-2 text-left"
+        className={`hud-input flex ${widthClass} items-center justify-between gap-2 text-left`}
         onClick={() => setOpen((v) => !v)}
         aria-expanded={open}
         aria-haspopup="listbox"
@@ -215,21 +224,21 @@ function TraitMultiSelect({
             )}
           </div>
           {options.length === 0 ? (
-            <p className="px-3 py-2 font-mono text-[11px] text-muted">Sin traits</p>
+            <p className="px-3 py-2 font-mono text-[11px] text-muted">{emptyLabel}</p>
           ) : (
             <ul role="listbox" aria-multiselectable className="py-1">
-              {options.map((trait) => {
-                const checked = selected.includes(trait);
+              {options.map((option) => {
+                const checked = selected.includes(option);
                 return (
-                  <li key={trait}>
+                  <li key={option}>
                     <label className="flex cursor-pointer items-center gap-2 px-3 py-1.5 hover:bg-hud/10">
                       <input
                         type="checkbox"
                         className="accent-hud"
                         checked={checked}
-                        onChange={() => onToggle(trait)}
+                        onChange={() => onToggle(option)}
                       />
-                      <span className="truncate font-ui text-[13px] text-ink">{trait}</span>
+                      <span className="truncate font-ui text-[13px] text-ink">{option}</span>
                     </label>
                   </li>
                 );

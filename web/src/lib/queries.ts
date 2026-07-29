@@ -26,7 +26,7 @@ import type { Card } from './types';
 
 export interface CardFilters {
   set_code?: string;
-  color?: string;
+  color?: string; // Comma-separated; OR match (any of the selected colors).
   card_type?: string;
   exclude_card_type?: string;
   rarity?: string;
