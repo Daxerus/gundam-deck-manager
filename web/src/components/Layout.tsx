@@ -7,6 +7,7 @@ import { ApiError } from '../lib/api';
 const NAV = [
   { to: '/', label: 'Catálogo', end: true },
   { to: '/collection', label: 'Colección' },
+  { to: '/pilot-links', label: 'Pilot Links' },
   { to: '/decks', label: 'Decks' },
   { to: '/active', label: 'Activos' },
   { to: '/shopping', label: 'Compra' },

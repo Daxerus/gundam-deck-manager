@@ -185,6 +185,27 @@ export async function listCards(
       );
     }
   }
+  if (q.link_ref) {
+    // OR semantics: unit matches if link_refs contains ANY of the given refs
+    // (pilot name and/or pilot traits).
+    const selected = q.link_ref
+      .split(',')
+      .map((t) => t.trim())
+      .filter(Boolean);
+    if (selected.length > 0) {
+      conds.push(
+        or(
+          ...selected.map(
+            (t) =>
+              sql`exists (
+                select 1 from json_each(${cards.linkRefs})
+                where lower(value) = ${t.toLowerCase()}
+              )`,
+          ),
+        )!,
+      );
+    }
+  }
   if (ownedOnly) {
     const userId = opts.collectionUserId;
     if (userId == null) {

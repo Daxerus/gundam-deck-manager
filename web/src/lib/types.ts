@@ -23,6 +23,8 @@ export interface Card {
   whereToGet: string | null;
   keywordEffects: { keyword: string; value?: number }[] | null;
   traits: string[] | null;
+  /** Parsed link targets (pilot names or trait names) from the unit's Link field. */
+  linkRefs: string[] | null;
   /** Other physical printings of the same card_number (catalog grouped view). */
   variants?: Card[];
 }

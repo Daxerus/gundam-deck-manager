@@ -5,6 +5,7 @@ import { Layout } from './components/Layout';
 import { Login } from './pages/Login';
 import { Catalog } from './pages/Catalog';
 import { Collection } from './pages/Collection';
+import { PilotLinks } from './pages/PilotLinks';
 import { Decks } from './pages/Decks';
 import { DeckEditor } from './pages/DeckEditor';
 import { ActiveDecks } from './pages/ActiveDecks';
@@ -56,6 +57,7 @@ export default function App() {
       >
         <Route index element={<Catalog />} />
         <Route path="collection" element={<Collection />} />
+        <Route path="pilot-links" element={<PilotLinks />} />
         <Route path="decks" element={<Decks />} />
         <Route path="decks/:id" element={<DeckEditor />} />
         <Route path="active" element={<ActiveDecks />} />

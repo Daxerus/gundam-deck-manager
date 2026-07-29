@@ -40,6 +40,8 @@ export interface CardFilters {
   source_title?: string;
   /** Comma-separated traits; OR match (any of the selected traits). */
   traits?: string;
+  /** Comma-separated link targets; OR match against unit link_refs (pilot name/traits). */
+  link_ref?: string;
   limit?: number;
   offset?: number;
 }
