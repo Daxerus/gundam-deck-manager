@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import type { CardFilters } from '../lib/queries';
-import { useSourceTitles, useTraits } from '../lib/queries';
+import { useRarities, useSourceTitles, useTraits } from '../lib/queries';
 import type { SetInfo } from '../lib/types';
 import { CARD_COLORS } from '../lib/colors';
 
@@ -28,6 +28,7 @@ export function Filters({
 }) {
   const sourceTitles = useSourceTitles();
   const traits = useTraits();
+  const rarities = useRarities();
 
   const set = (patch: Partial<CardFilters>) => {
     const next: CardFilters = { ...filters, offset: 0, ...patch };
@@ -114,6 +115,20 @@ export function Filters({
           {cardTypes.map((t) => (
             <option key={t} value={t}>
               {t}
+            </option>
+          ))}
+        </select>
+      </Field>
+      <Field label="Rareza">
+        <select
+          className="hud-input w-28"
+          value={filters.rarity ?? ''}
+          onChange={(e) => set({ rarity: e.target.value })}
+        >
+          <option value="">Todas</option>
+          {(rarities.data ?? []).map((r) => (
+            <option key={r.rarity} value={r.rarity}>
+              {r.rarity}
             </option>
           ))}
         </select>

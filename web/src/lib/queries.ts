@@ -100,6 +100,15 @@ export function useTraits() {
   });
 }
 
+export function useRarities() {
+  return useQuery({
+    queryKey: ['rarities'],
+    queryFn: () =>
+      api.get<{ data: { rarity: string; count: number }[] }>('/rarities').then((r) => r.data),
+    staleTime: 5 * 60_000,
+  });
+}
+
 export function useInfiniteCards(filters: CardFilters, pageSize = 60) {
   const { offset: _offset, limit: _limit, ...stable } = filters;
   return useInfiniteQuery({
@@ -339,6 +348,7 @@ export function useSyncCatalog() {
       qc.invalidateQueries({ queryKey: ['sets'] });
       qc.invalidateQueries({ queryKey: ['source-titles'] });
       qc.invalidateQueries({ queryKey: ['traits'] });
+      qc.invalidateQueries({ queryKey: ['rarities'] });
       qc.invalidateQueries({ queryKey: ['cards'] });
     },
   });

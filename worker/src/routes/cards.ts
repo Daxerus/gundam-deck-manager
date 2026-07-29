@@ -100,6 +100,27 @@ export const cardsRoutes = new Hono<AppEnv>()
     return c.json({ data: result.results ?? [] });
   })
 
+  // GET /api/rarities — distinct rarities for filters
+  .get('/rarities', async (c) => {
+    const db = getDb(c.env);
+    const rows = await db
+      .select({
+        rarity: cards.rarity,
+        count: count(),
+      })
+      .from(cards)
+      .where(sql`${cards.rarity} is not null and ${cards.rarity} != ''`)
+      .groupBy(cards.rarity)
+      .orderBy(asc(cards.rarity))
+      .all();
+    return c.json({
+      data: rows.map((r) => ({
+        rarity: r.rarity as string,
+        count: r.count,
+      })),
+    });
+  })
+
   // GET /api/status — catalog + dataset info
   .get('/status', async (c) => {
     const db = getDb(c.env);
