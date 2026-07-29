@@ -6,14 +6,14 @@ import { CardImage, CardTile } from '../components/CardTile';
 import { CardDetailModal } from '../components/CardDetailModal';
 import { ScrollToTopButton } from '../components/ScrollToTopButton';
 import {
-  useCollection,
   useCollectionStatus,
   useInfiniteCards,
+  useOwnedByCardNumber,
   useSets,
-  useSetCollection,
   type CardFilters,
 } from '../lib/queries';
 import { useLoadMoreOnScroll } from '../lib/useLoadMoreOnScroll';
+import { mergeCardStatus } from '../lib/cardStatus';
 import type { Card, CardStatusBreakdown } from '../lib/types';
 
 const PAGE = 60;
@@ -136,13 +136,13 @@ function PilotLinkedUnitsModal({ pilot, onClose }: { pilot: Card; onClose: () =>
 
   const sets = useSets();
   const cards = useInfiniteCards(filters, PAGE);
-  const collection = useCollection();
+  const ownedByCard = useOwnedByCardNumber();
   const statusMap = useCollectionStatus();
-  const setColl = useSetCollection();
 
   const total = cards.data?.pages[0]?._meta.total ?? 0;
   const items = cards.data?.pages.flatMap((page) => page.data) ?? [];
-  const owned = (pid: string) => collection.data?.[pid] ?? 0;
+  // Copies are counted per card_number (all printings together), as the deck editor does.
+  const owned = (cardNumber: string) => ownedByCard.data?.[cardNumber] ?? 0;
   const cardStatus = (pid: string) => statusMap.data?.[pid];
 
   const loadMoreRef = useLoadMoreOnScroll({
@@ -234,7 +234,6 @@ function PilotLinkedUnitsModal({ pilot, onClose }: { pilot: Card; onClose: () =>
                       card={card}
                       owned={owned}
                       cardStatus={cardStatus}
-                      onChangeOwned={(productId, quantity) => setColl.mutate({ productId, quantity })}
                       onOpenDetail={setDetail}
                     />
                   ))}
@@ -261,27 +260,29 @@ function LinkedUnitTile({
   card,
   owned,
   cardStatus,
-  onChangeOwned,
   onOpenDetail,
 }: {
   card: Card;
-  owned: (productId: string) => number;
+  owned: (cardNumber: string) => number;
   cardStatus: (productId: string) => CardStatusBreakdown | undefined;
-  onChangeOwned: (productId: string, quantity: number) => void;
   onOpenDetail: (card: Card) => void;
 }) {
   const variants = card.variants?.length ? card.variants : [card];
   const [variantIndex, setVariantIndex] = useState(0);
   const selected = variants[Math.min(variantIndex, variants.length - 1)] ?? card;
-  const quantity = owned(selected.productId);
+  const quantity = owned(card.cardNumber);
+  const status = mergeCardStatus(
+    selected.productId,
+    variants.map((variant) => cardStatus(variant.productId)),
+  );
   const hasAlternates = variants.length > 1;
 
   return (
     <CardTile
       card={selected}
       owned={quantity}
-      status={cardStatus(selected.productId)}
-      onChangeOwned={(next) => onChangeOwned(selected.productId, next)}
+      status={status}
+      readOnly
       onClick={() => onOpenDetail(selected)}
       footer={
         hasAlternates ? (
