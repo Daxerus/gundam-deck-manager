@@ -22,6 +22,29 @@ export const collectionRoutes = new Hono<AppEnv>()
     return c.json({ data: map });
   })
 
+  // GET /api/collection/owned-by-card — owned quantities summed across printings, keyed by card_number
+  .get('/owned-by-card', async (c) => {
+    const db = getDb(c.env);
+    const userId = c.get('userId')!;
+    const rows = await db
+      .select({
+        productId: collectionItems.productId,
+        cardNumber: cards.cardNumber,
+        quantity: collectionItems.quantity,
+      })
+      .from(collectionItems)
+      .leftJoin(cards, eq(cards.productId, collectionItems.productId))
+      .where(eq(collectionItems.userId, userId))
+      .all();
+    const map: Record<string, number> = {};
+    for (const r of rows) {
+      // Printings missing from the catalog fall back to their product_id, as deck detail does.
+      const key = r.cardNumber ?? r.productId;
+      map[key] = (map[key] ?? 0) + (Number(r.quantity) || 0);
+    }
+    return c.json({ data: map });
+  })
+
   // GET /api/collection/status — location + loan breakdown per printing
   .get('/status', async (c) => {
     const db = getDb(c.env);

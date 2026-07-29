@@ -120,6 +120,15 @@ export function useCollection() {
   });
 }
 
+/** Owned copies summed across all printings, keyed by cardNumber (deck composition key). */
+export function useOwnedByCardNumber() {
+  return useQuery({
+    queryKey: ['collection', 'owned-by-card'],
+    queryFn: () =>
+      api.get<{ data: Record<string, number> }>('/collection/owned-by-card').then((r) => r.data),
+  });
+}
+
 export function useCollectionStatus() {
   return useQuery({
     queryKey: ['collection-status'],

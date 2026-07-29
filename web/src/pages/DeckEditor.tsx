@@ -7,6 +7,7 @@ import {
   useInfiniteCards,
   useDeck,
   useDeleteDeck,
+  useOwnedByCardNumber,
   useSaveDeckCards,
   useSets,
   useUpdateDeck,
@@ -25,6 +26,7 @@ export function DeckEditor() {
   const navigate = useNavigate();
 
   const deck = useDeck(deckId);
+  const ownedByCard = useOwnedByCardNumber();
   const update = useUpdateDeck();
   const del = useDeleteDeck();
   const saveCards = useSaveDeckCards(deckId);
@@ -70,6 +72,7 @@ export function DeckEditor() {
   const draftEntries = useMemo(() => {
     if (!deck.data) return [] as DeckCardEntry[];
     const serverByNumber = new Map(deck.data.cards.map((c) => [c.cardNumber, c]));
+    const owned = ownedByCard.data;
     const entries: DeckCardEntry[] = [];
     for (const [cardNumber, quantity] of draftQty) {
       if (quantity <= 0) continue;
@@ -77,7 +80,8 @@ export function DeckEditor() {
       entries.push({
         cardNumber,
         quantity,
-        owned: server?.owned ?? 0,
+        // Cards added in the draft are not in the server payload yet, so read the collection directly.
+        owned: owned ? (owned[cardNumber] ?? 0) : (server?.owned ?? 0),
         allocated: server?.allocated ?? 0,
         allocatedByPrinting: server?.allocatedByPrinting,
         card: cardMeta.get(cardNumber) ?? server?.card ?? null,
@@ -85,7 +89,7 @@ export function DeckEditor() {
     }
     entries.sort((a, b) => cardSortKey(a.card).localeCompare(cardSortKey(b.card)));
     return entries;
-  }, [deck.data, draftQty, cardMeta]);
+  }, [deck.data, draftQty, cardMeta, ownedByCard.data]);
 
   const liveValidation = useMemo(() => {
     if (!deck.data) return null;
