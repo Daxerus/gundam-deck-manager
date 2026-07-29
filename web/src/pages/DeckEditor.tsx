@@ -290,6 +290,7 @@ export function DeckEditor() {
           )}
           <AddCards
             getQty={(cardNumber) => draftQty.get(cardNumber) ?? 0}
+            getOwned={(cardNumber) => ownedByCard.data?.[cardNumber] ?? 0}
             onAdd={(card, q) => setLocalCard(card.cardNumber, q, card)}
             onPreview={(card) => setPreview(card ? { card, side: 'add' } : null)}
           />
@@ -555,10 +556,12 @@ const DECK_CARD_TYPES = ['UNIT', 'PILOT', 'COMMAND', 'BASE'];
 
 function AddCards({
   getQty,
+  getOwned,
   onAdd,
   onPreview,
 }: {
   getQty: (cardNumber: string) => number;
+  getOwned: (cardNumber: string) => number;
   onAdd: (card: Card, quantity: number) => void;
   onPreview: (card: Card | null) => void;
 }) {
@@ -616,7 +619,7 @@ function AddCards({
         />
       </div>
       <p className="mb-3 font-mono text-[10px] text-muted">
-        Una ficha por identidad (normal + alter suman). Usa − / + para la cantidad en el deck.
+        El badge muestra copias libres (colección − deck); en negativo = te faltan. Usa − / + para el deck.
       </p>
       <div ref={scrollRef} className="grid max-h-[520px] grid-cols-2 gap-2 overflow-auto sm:grid-cols-4">
         {items.map((card) => (
@@ -624,6 +627,7 @@ function AddCards({
             key={card.cardNumber}
             card={card}
             getQty={getQty}
+            getOwned={getOwned}
             onAdd={onAdd}
             onPreview={onPreview}
           />
@@ -646,17 +650,23 @@ function AddCards({
 function AddCardTile({
   card,
   getQty,
+  getOwned,
   onAdd,
   onPreview,
 }: {
   card: Card;
   getQty: (cardNumber: string) => number;
+  getOwned: (cardNumber: string) => number;
   onAdd: (card: Card, quantity: number) => void;
   onPreview: (card: Card | null) => void;
 }) {
   // Representative printing only — deck composition is by card_number.
   const quantity = getQty(card.cardNumber);
+  const owned = getOwned(card.cardNumber);
+  const remaining = owned - quantity;
   const cc = colorClasses(card.color);
+  const badgeTone =
+    remaining <= 0 ? 'border-alert/50 text-alert' : 'border-ok/50 text-ok';
 
   return (
     <div
@@ -673,11 +683,21 @@ function AddCardTile({
       <button
         type="button"
         className="relative block aspect-[5/7] w-full overflow-hidden outline-none focus:shadow-hud"
-        title={`${card.name} (${card.cardNumber})`}
+        title={`${card.name} (${card.cardNumber}) · ${owned} en colección · ${quantity} en deck · quedan ${remaining}`}
         aria-label={`Vista previa de ${card.name}`}
         onClick={() => onPreview(card)}
       >
         <CardImage card={card} />
+        <span
+          className={`absolute bottom-1 right-1 inline-flex h-7 items-center border bg-void/85 px-1.5 font-mono text-[16px] ${badgeTone}`}
+          title={
+            remaining < 0
+              ? `Te faltan ${-remaining} (colección ${owned}, deck ${quantity})`
+              : `${owned} en colección − ${quantity} en deck = ${remaining} disponibles`
+          }
+        >
+          x{remaining}
+        </span>
       </button>
       <QuantityStepper
         value={quantity}

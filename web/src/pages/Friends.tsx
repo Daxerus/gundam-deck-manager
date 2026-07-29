@@ -1,22 +1,28 @@
-import { useMemo, useState } from 'react';
+import { useState } from 'react';
 import { Link } from 'react-router-dom';
+import { useQueryClient } from '@tanstack/react-query';
 import { Panel } from '../components/hud';
 import { CardTile, CardImage } from '../components/CardTile';
 import { Filters } from '../components/Filters';
+import { ScrollToTopButton } from '../components/ScrollToTopButton';
 import {
   useAcceptFriend,
   useCreateCardRequest,
   useCreateLoan,
-  useFriendCollection,
+  useFriendCollectionStatus,
   useFriends,
+  useInfiniteFriendCards,
   useRemoveFriend,
   useRequestFriend,
   useSearchUsers,
   useSets,
   type CardFilters,
 } from '../lib/queries';
+import { useLoadMoreOnScroll } from '../lib/useLoadMoreOnScroll';
 import { ApiError } from '../lib/api';
 import type { Card, CardStatusBreakdown } from '../lib/types';
+
+const PAGE = 60;
 
 export function Friends() {
   const [search, setSearch] = useState('');
@@ -29,18 +35,9 @@ export function Friends() {
   const acceptFriend = useAcceptFriend();
   const removeFriend = useRemoveFriend();
 
-  const accepted = useMemo(
-    () => (friends.data ?? []).filter((f) => f.status === 'accepted'),
-    [friends.data],
-  );
-  const incoming = useMemo(
-    () => (friends.data ?? []).filter((f) => f.isIncoming),
-    [friends.data],
-  );
-  const outgoing = useMemo(
-    () => (friends.data ?? []).filter((f) => f.isOutgoing),
-    [friends.data],
-  );
+  const accepted = (friends.data ?? []).filter((f) => f.status === 'accepted');
+  const incoming = (friends.data ?? []).filter((f) => f.isIncoming);
+  const outgoing = (friends.data ?? []).filter((f) => f.isOutgoing);
 
   async function run(action: () => Promise<unknown>, okMsg: string) {
     setMsg(null);
@@ -201,53 +198,6 @@ export function Friends() {
   );
 }
 
-function matchesFriendFilters(
-  card: Card,
-  status: CardStatusBreakdown | undefined,
-  filters: CardFilters,
-): boolean {
-  if (filters.name) {
-    const q = filters.name.trim().toLowerCase();
-    const hay = `${card.name} ${card.cardNumber}`.toLowerCase();
-    if (!hay.includes(q)) return false;
-  }
-  if (filters.effect) {
-    const q = filters.effect.trim().toLowerCase();
-    if (!(card.effect ?? '').toLowerCase().includes(q)) return false;
-  }
-  if (filters.set_code) {
-    // Mirrors the server filter in worker/src/routes/cards.ts: promos and reprints keep a
-    // card number from another set, so both the set code and the number prefix count.
-    const set = filters.set_code.toLowerCase();
-    const numberPrefix = card.cardNumber.split('-')[0]?.toLowerCase();
-    if (card.setCode.toLowerCase() !== set && numberPrefix !== set) return false;
-  }
-  if (filters.color && card.color !== filters.color) return false;
-  if (filters.card_type && (card.cardType ?? '').toLowerCase() !== filters.card_type.toLowerCase()) {
-    return false;
-  }
-  if (filters.level !== undefined && filters.level !== '' && Number.isFinite(Number(filters.level))) {
-    if (card.level !== Number(filters.level)) return false;
-  }
-  if (filters.status_color) {
-    if (!status || status.statusColor !== filters.status_color) return false;
-  }
-  if (filters.source_title && card.sourceTitle !== filters.source_title) {
-    return false;
-  }
-  if (filters.traits) {
-    const selected = filters.traits
-      .split(',')
-      .map((t) => t.trim().toLowerCase())
-      .filter(Boolean);
-    if (selected.length > 0) {
-      const cardTraits = (card.traits ?? []).map((t) => t.toLowerCase());
-      if (!selected.some((t) => cardTraits.includes(t))) return false;
-    }
-  }
-  return true;
-}
-
 function FriendCollectionView({
   friendUserId,
   onBack,
@@ -255,31 +205,41 @@ function FriendCollectionView({
   friendUserId: number;
   onBack: () => void;
 }) {
-  const friendCol = useFriendCollection(friendUserId);
-  const sets = useSets();
-  const [filters, setFilters] = useState<CardFilters>({});
+  const qc = useQueryClient();
+  const [filters, setFilters] = useState<CardFilters>({
+    limit: PAGE,
+    owned_only: '1',
+  });
   const [actionCard, setActionCard] = useState<Card | null>(null);
   const [toast, setToast] = useState<string | null>(null);
 
-  const username = friendCol.data?.user.username ?? '…';
-  const statusMap = friendCol.data?.status ?? {};
-  const cards = friendCol.data?.cards ?? [];
+  const sets = useSets();
+  const meta = useFriendCollectionStatus(friendUserId);
+  const cards = useInfiniteFriendCards(friendUserId, filters, PAGE);
 
-  const filtered = useMemo(
-    () => cards.filter((card) => matchesFriendFilters(card, statusMap[card.productId], filters)),
-    [cards, statusMap, filters],
-  );
+  const username = meta.data?.user.username ?? '…';
+  const statusMap = meta.data?.status ?? {};
+  const total = cards.data?.pages[0]?._meta.total ?? 0;
+  const items = cards.data?.pages.flatMap((page) => page.data) ?? [];
+  const totalCopies = Object.values(statusMap).reduce((s, st) => s + st.displayQty, 0);
+  const status = (pid: string) => statusMap[pid];
 
-  const totalCopies = filtered.reduce((sum, card) => {
-    const st = statusMap[card.productId];
-    return sum + (st?.displayQty ?? st?.owned ?? 0);
-  }, 0);
+  const loadMoreRef = useLoadMoreOnScroll({
+    hasNextPage: !!cards.hasNextPage,
+    isFetchingNextPage: cards.isFetchingNextPage,
+    fetchNextPage: cards.fetchNextPage,
+  });
+
+  const updateFilters = (next: CardFilters) => {
+    const { offset: _offset, ...rest } = next;
+    setFilters({ ...rest, owned_only: '1' });
+  };
 
   return (
     <div className="space-y-4">
       <Panel
         title={`Colección // ${username}`}
-        subtitle={`${filtered.length} cartas distintas · ${totalCopies} copias · solo lectura`}
+        subtitle={`${total} cartas distintas · ${totalCopies} copias · solo lectura`}
         className="z-20"
       >
         <div className="mb-3">
@@ -293,33 +253,31 @@ function FriendCollectionView({
         </div>
         <Filters
           filters={filters}
-          onChange={setFilters}
+          onChange={updateFilters}
           sets={sets.data ?? []}
           showStatusColor
         />
         {toast && <p className="mt-2 font-mono text-[12px] text-hud">{toast}</p>}
       </Panel>
 
-      {friendCol.isLoading && <p className="font-mono text-sm text-muted">Cargando colección…</p>}
-      {friendCol.isError && (
+      {cards.isLoading && <p className="font-mono text-sm text-muted">Cargando colección…</p>}
+      {cards.isError && (
         <p className="font-mono text-sm text-alert">No se pudo cargar la colección del amigo.</p>
       )}
 
-      {!friendCol.isLoading && cards.length === 0 && (
+      {!cards.isLoading && items.length === 0 && (
         <Panel tone="amber">
-          <p className="font-ui text-ink">Este piloto no tiene cartas en colección.</p>
-        </Panel>
-      )}
-
-      {!friendCol.isLoading && cards.length > 0 && filtered.length === 0 && (
-        <Panel tone="amber">
-          <p className="font-ui text-ink">Ningún resultado con esos filtros.</p>
+          <p className="font-ui text-ink">
+            {meta.data && Object.keys(statusMap).length === 0
+              ? 'Este piloto no tiene cartas en colección.'
+              : 'Ningún resultado con esos filtros.'}
+          </p>
         </Panel>
       )}
 
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6">
-        {filtered.map((card) => {
-          const st = statusMap[card.productId];
+        {items.map((card) => {
+          const st = status(card.productId);
           return (
             <CardTile
               key={card.productId}
@@ -331,22 +289,31 @@ function FriendCollectionView({
             />
           );
         })}
+        <div ref={loadMoreRef} className="col-span-full h-1" />
       </div>
+
+      {!cards.isLoading && items.length > 0 && (
+        <p className="text-center font-mono text-[10px] text-muted">
+          {cards.isFetchingNextPage ? 'Cargando más…' : `${items.length} / ${total}`}
+        </p>
+      )}
 
       {actionCard && (
         <FriendCardActionModal
           card={actionCard}
-          status={statusMap[actionCard.productId]}
+          status={status(actionCard.productId)}
           friendUserId={friendUserId}
           friendUsername={username}
           onClose={() => setActionCard(null)}
           onDone={(message) => {
             setToast(message);
             setActionCard(null);
-            void friendCol.refetch();
+            void qc.invalidateQueries({ queryKey: ['friend-collection', friendUserId] });
+            void qc.invalidateQueries({ queryKey: ['friend-cards'] });
           }}
         />
       )}
+      <ScrollToTopButton />
     </div>
   );
 }

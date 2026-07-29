@@ -1,9 +1,6 @@
 import { Hono } from 'hono';
-import { inArray } from 'drizzle-orm';
 import type { AppEnv } from '../auth';
 import { getDb } from '../db/client';
-import { cards } from '../db/schema';
-import { readJson } from '../util/json';
 import {
   acceptFriendship,
   areFriends,
@@ -14,7 +11,8 @@ import {
 } from '../services/friends';
 import { getCollectionStatus } from '../services/loans';
 import { findUserById } from '../services/users';
-import { serializeCard } from './cards';
+import { listCards } from '../services/cardList';
+import { readJson } from '../util/json';
 
 export const friendsRoutes = new Hono<AppEnv>()
   .get('/', async (c) => {
@@ -65,7 +63,8 @@ export const friendsRoutes = new Hono<AppEnv>()
     return c.json({ ok: true });
   })
 
-  .get('/:id/collection', async (c) => {
+  // GET /api/friends/:id/collection/status — status map only (mirrors /collection/status)
+  .get('/:id/collection/status', async (c) => {
     const db = getDb(c.env);
     const userId = c.get('userId')!;
     const friendUserId = Math.floor(Number(c.req.param('id')));
@@ -73,31 +72,34 @@ export const friendsRoutes = new Hono<AppEnv>()
       return c.json({ error: 'Invalid id' }, 400);
     }
     const ok = await areFriends(db, userId, friendUserId);
-    if (!ok) return c.json({ error: 'Not friends', status: 403 }, 403);
+    if (!ok) return c.json({ error: 'Not friends' }, 403);
 
     const friend = await findUserById(db, friendUserId);
     if (!friend) return c.json({ error: 'User not found' }, 404);
 
     const status = await getCollectionStatus(db, friendUserId);
-    const collection: Record<string, number> = {};
-    for (const [pid, s] of Object.entries(status)) {
-      collection[pid] = s.owned;
-    }
-    const productIds = Object.keys(status);
-    const cardRows = [];
-    const CHUNK = 90;
-    for (let i = 0; i < productIds.length; i += CHUNK) {
-      const chunk = productIds.slice(i, i + CHUNK);
-      const rows = await db.select().from(cards).where(inArray(cards.productId, chunk)).all();
-      cardRows.push(...rows);
-    }
-    const cardList = cardRows.map(serializeCard);
     return c.json({
       data: {
         user: { id: friend.id, username: friend.username },
-        collection,
         status,
-        cards: cardList,
       },
     });
+  })
+
+  // GET /api/friends/:id/cards — paginated owned cards (same filters as /api/cards)
+  .get('/:id/cards', async (c) => {
+    const db = getDb(c.env);
+    const userId = c.get('userId')!;
+    const friendUserId = Math.floor(Number(c.req.param('id')));
+    if (!Number.isInteger(friendUserId) || friendUserId < 1) {
+      return c.json({ error: 'Invalid id' }, 400);
+    }
+    const ok = await areFriends(db, userId, friendUserId);
+    if (!ok) return c.json({ error: 'Not friends' }, 403);
+
+    const result = await listCards(db, c.req.query(), {
+      collectionUserId: friendUserId,
+      forceOwnedOnly: true,
+    });
+    return c.json(result);
   });

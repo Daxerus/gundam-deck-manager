@@ -54,6 +54,7 @@ function invalidateCollectionSideEffects(qc: QueryClient) {
   qc.invalidateQueries({ queryKey: ['shopping'] });
   qc.invalidateQueries({ queryKey: ['loans'] });
   qc.invalidateQueries({ queryKey: ['friend-collection'] });
+  qc.invalidateQueries({ queryKey: ['friend-cards'] });
 }
 
 function qs(params: Record<string, unknown>): string {
@@ -404,21 +405,40 @@ export function useRemoveFriend() {
   });
 }
 
-export function useFriendCollection(friendUserId: number | null) {
+export function useFriendCollectionStatus(friendUserId: number | null) {
   return useQuery({
-    queryKey: ['friend-collection', friendUserId],
+    queryKey: ['friend-collection', friendUserId, 'status'],
     enabled: friendUserId != null,
     queryFn: () =>
       api
         .get<{
           data: {
             user: { id: number; username: string };
-            collection: Record<string, number>;
             status: Record<string, CardStatusBreakdown>;
-            cards: Card[];
           };
-        }>(`/friends/${friendUserId}/collection`)
+        }>(`/friends/${friendUserId}/collection/status`)
         .then((r) => r.data),
+  });
+}
+
+export function useInfiniteFriendCards(
+  friendUserId: number | null,
+  filters: CardFilters,
+  pageSize = 60,
+) {
+  const { offset: _offset, limit: _limit, ...stable } = filters;
+  return useInfiniteQuery({
+    queryKey: ['friend-cards', 'infinite', friendUserId, { ...stable, limit: pageSize }],
+    enabled: friendUserId != null,
+    initialPageParam: 0,
+    queryFn: ({ pageParam }) =>
+      api.get<Paginated<Card>>(
+        `/friends/${friendUserId}/cards${qs({ ...stable, limit: pageSize, offset: pageParam } as Record<string, unknown>)}`,
+      ),
+    getNextPageParam: (last) => {
+      const next = last._meta.offset + last._meta.count;
+      return next < last._meta.total ? next : undefined;
+    },
   });
 }
 
