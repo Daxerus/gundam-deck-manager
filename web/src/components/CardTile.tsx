@@ -47,6 +47,7 @@ export function CardTile({
   footer,
   onClick,
   onReturnLoan,
+  onLend,
   readOnly = false,
 }: {
   card: Card;
@@ -56,6 +57,7 @@ export function CardTile({
   footer?: ReactNode;
   onClick?: () => void;
   onReturnLoan?: (loanId: number, productId: string, maxQty: number, username: string) => void;
+  onLend?: (maxQty: number) => void;
   readOnly?: boolean;
 }) {
   const cc = colorClasses(card.color);
@@ -254,6 +256,11 @@ export function CardTile({
                 label={`x${status.box} Colección`}
                 revealOrder={0}
                 layoutId={`quantity-helper-${card.productId}`}
+                action={
+                  onLend && !readOnly
+                    ? { label: 'Prestar', onClick: () => onLend(status.box) }
+                    : undefined
+                }
               />
             )}
           </div>

@@ -479,7 +479,12 @@ export function useCreateLoan() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (body: { borrowerId: number; items: { productId: string; quantity: number }[] }) =>
-      api.post('/loans', body),
+      api
+        .post<{ data: { loanId: number; deckImpacts: { deckId: number; name: string }[] } }>(
+          '/loans',
+          body,
+        )
+        .then((r) => r.data),
     onSuccess: () => invalidateCollectionSideEffects(qc),
   });
 }

@@ -12,6 +12,7 @@ import {
   useFriendCollectionStatus,
   useFriends,
   useInfiniteFriendCards,
+  useOwnedByCardNumber,
   useRemoveFriend,
   useRequestFriend,
   useSearchUsers,
@@ -335,18 +336,27 @@ function FriendCardActionModal({
 }) {
   const createLoan = useCreateLoan();
   const createRequest = useCreateCardRequest();
+  const ownedByCard = useOwnedByCardNumber();
   const [qty, setQty] = useState(1);
   const [error, setError] = useState<string | null>(null);
   const busy = createLoan.isPending || createRequest.isPending;
+  // Copies are counted per card_number: any printing of the card can be lent.
+  const myCopies = ownedByCard.data?.[card.cardNumber] ?? 0;
+  const canLend = myCopies >= qty;
 
   async function lend() {
     setError(null);
     try {
-      await createLoan.mutateAsync({
+      const result = await createLoan.mutateAsync({
         borrowerId: friendUserId,
         items: [{ productId: card.productId, quantity: qty }],
       });
-      onDone(`Prestado x${qty} a ${friendUsername}`);
+      const broken = result.deckImpacts.map((d) => `"${d.name}"`).join(', ');
+      onDone(
+        broken
+          ? `Prestado x${qty} a ${friendUsername} · se ha desmontado ${broken}`
+          : `Prestado x${qty} a ${friendUsername}`,
+      );
     } catch (err) {
       setError(err instanceof ApiError ? err.message : 'No se pudo prestar');
     }
@@ -386,6 +396,10 @@ function FriendCardActionModal({
                   </>
                 ) : null}
               </p>
+              <p className="font-mono text-[12px] text-muted">
+                Tú tienes <span className={myCopies > 0 ? 'text-ok' : 'text-alert'}>x{myCopies}</span>{' '}
+                (todas las ediciones)
+              </p>
               <label className="flex flex-col gap-1">
                 <span className="font-display text-[9px] uppercase tracking-[0.2em] text-muted">
                   Cantidad
@@ -402,7 +416,8 @@ function FriendCardActionModal({
               <div className="flex flex-wrap gap-2">
                 <button
                   type="button"
-                  disabled={busy}
+                  disabled={busy || !canLend}
+                  title={canLend ? undefined : `Solo tienes x${myCopies} de esta carta`}
                   onClick={() => void lend()}
                   className="border border-loan/50 px-3 py-1.5 font-display text-[11px] uppercase tracking-[0.16em] text-loan hover:bg-loan/10 disabled:opacity-40"
                 >

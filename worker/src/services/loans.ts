@@ -15,7 +15,13 @@ import {
   type CardStatusBreakdown,
   type LoanPartyQty,
 } from './cardStatus';
-import { getOwnedByProductId, isDeckComplete, getPrintingsByCardNumber, loadDeckStates } from './deckState';
+import {
+  getOwnedByProductId,
+  getPrintingsByCardNumber,
+  getProductIdToCardNumberMap,
+  isDeckComplete,
+  loadDeckStates,
+} from './deckState';
 
 export type LoanItemInput = { productId: string; quantity: number };
 export type DeckImpact = { deckId: number; name: string };
@@ -60,7 +66,8 @@ export async function releaseCopies(
 
   let allocated = 0;
   for (const a of allocRows) allocated += a.quantity;
-  const box = owned - allocated;
+  // Stale allocations can exceed owned copies; a negative box would inflate the deck pull.
+  const box = Math.max(0, owned - allocated);
 
   let remaining = need;
   const fromBox = Math.min(box, remaining);
@@ -202,6 +209,111 @@ async function upsertLoanItem(db: DB, loanId: number, productId: string, addQty:
   }
 }
 
+export type PrintingAvailability = {
+  productId: string;
+  /** Copies sitting in the box (not held by any deck). */
+  free: number;
+  /** Copies currently allocated to a deck. */
+  inDecks: number;
+};
+
+/**
+ * Pick the printings to hand over for a loan requested against `requestedProductId`.
+ * Printings of the same card_number are interchangeable everywhere else in the app, so
+ * prefer the requested printing, then any printing with box copies, and only take copies
+ * out of a deck when nothing is free. Returns null when the lender is short.
+ */
+export function selectLendPrintings(
+  requestedProductId: string,
+  quantity: number,
+  available: PrintingAvailability[],
+): LoanItemInput[] | null {
+  const ordered = [...available].sort((a, b) => {
+    if (a.productId === b.productId) return 0;
+    if (a.productId === requestedProductId) return -1;
+    if (b.productId === requestedProductId) return 1;
+    return a.productId.localeCompare(b.productId);
+  });
+
+  const picked = new Map<string, number>();
+  let remaining = quantity;
+  for (const source of ['free', 'inDecks'] as const) {
+    for (const printing of ordered) {
+      if (remaining <= 0) break;
+      const take = Math.min(printing[source], remaining);
+      if (take <= 0) continue;
+      picked.set(printing.productId, (picked.get(printing.productId) ?? 0) + take);
+      remaining -= take;
+    }
+  }
+  if (remaining > 0) return null;
+  return [...picked.entries()].map(([productId, qty]) => ({ productId, quantity: qty }));
+}
+
+/** Map requested printings onto printings the lender actually owns. */
+async function resolveLendItems(
+  db: DB,
+  lenderId: number,
+  items: LoanItemInput[],
+): Promise<{ ok: true; items: LoanItemInput[] } | { ok: false; error: string }> {
+  const owned = await getOwnedByProductId(db, lenderId);
+  const requestedIds = [...new Set(items.map((i) => i.productId))];
+  const cardNumberByProduct = await getProductIdToCardNumberMap(db, requestedIds);
+  const cardNumbers = [...new Set(requestedIds.map((id) => cardNumberByProduct.get(id) ?? id))];
+  const printingsByCardNumber = await getPrintingsByCardNumber(db, cardNumbers);
+
+  const deckRows = await db.select().from(decks).where(eq(decks.userId, lenderId)).all();
+  const deckIds = deckRows.map((d) => d.id);
+  const allocRows =
+    deckIds.length === 0
+      ? []
+      : await db.select().from(allocations).where(inArray(allocations.deckId, deckIds)).all();
+  const allocatedByProduct = new Map<string, number>();
+  for (const a of allocRows) {
+    if (a.quantity <= 0) continue;
+    allocatedByProduct.set(a.productId, (allocatedByProduct.get(a.productId) ?? 0) + a.quantity);
+  }
+
+  // Requests naming different printings of one card draw from the same pool of copies.
+  const needByCardNumber = new Map<string, { requested: string[]; quantity: number }>();
+  for (const item of items) {
+    const cardNumber = cardNumberByProduct.get(item.productId) ?? item.productId;
+    const entry = needByCardNumber.get(cardNumber) ?? { requested: [], quantity: 0 };
+    entry.requested.push(item.productId);
+    entry.quantity += item.quantity;
+    needByCardNumber.set(cardNumber, entry);
+  }
+
+  const resolved = new Map<string, number>();
+  for (const [cardNumber, need] of needByCardNumber) {
+    const printings = new Set(printingsByCardNumber[cardNumber] ?? [cardNumber]);
+    for (const productId of need.requested) printings.add(productId);
+
+    const available: PrintingAvailability[] = [...printings].map((productId) => {
+      const total = owned[productId] ?? 0;
+      const inDecks = Math.min(total, allocatedByProduct.get(productId) ?? 0);
+      return { productId, free: total - inDecks, inDecks };
+    });
+
+    const picked = selectLendPrintings(need.requested[0]!, need.quantity, available);
+    if (!picked) {
+      const total = available.reduce((sum, p) => sum + p.free + p.inDecks, 0);
+      return {
+        ok: false,
+        error: `Not enough copies of ${cardNumber} to lend: you own ${total}, need ${need.quantity}`,
+      };
+    }
+    for (const p of picked) {
+      resolved.set(p.productId, (resolved.get(p.productId) ?? 0) + p.quantity);
+    }
+  }
+
+  return {
+    ok: true,
+    items: [...resolved.entries()].map(([productId, quantity]) => ({ productId, quantity })),
+  };
+}
+
 /** Transfer copies from lender to borrower and open/update a loan. */
 export async function applyLoanTransfer(
   db: DB,
@@ -214,8 +326,12 @@ export async function applyLoanTransfer(
   if (opts.lenderId === opts.borrowerId) {
     return { ok: false, error: 'Cannot lend to yourself', status: 400 };
   }
-  const items = normalizeItems(opts.items);
-  if (items.length === 0) return { ok: false, error: 'No items to lend', status: 400 };
+  const requested = normalizeItems(opts.items);
+  if (requested.length === 0) return { ok: false, error: 'No items to lend', status: 400 };
+
+  const resolution = await resolveLendItems(db, opts.lenderId, requested);
+  if (!resolution.ok) return { ok: false, error: resolution.error, status: 400 };
+  const items = resolution.items;
 
   const allImpacts: DeckImpact[] = [];
   const impactKeys = new Set<string>();

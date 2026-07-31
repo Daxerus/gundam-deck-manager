@@ -3,6 +3,7 @@ import { Panel } from '../components/hud';
 import { Filters } from '../components/Filters';
 import { CardTile } from '../components/CardTile';
 import { CardDetailModal } from '../components/CardDetailModal';
+import { LendCardDialog } from '../components/LendCardDialog';
 import { ReturnLoanDialog } from '../components/ReturnLoanDialog';
 import { ScrollToTopButton } from '../components/ScrollToTopButton';
 import {
@@ -24,12 +25,14 @@ export function Collection() {
     owned_only: '1',
   });
   const [detail, setDetail] = useState<Card | null>(null);
+  const [toast, setToast] = useState<string | null>(null);
   const [returnDlg, setReturnDlg] = useState<{
     loanId: number;
     productId: string;
     maxQty: number;
     username: string;
   } | null>(null);
+  const [lendDlg, setLendDlg] = useState<{ card: Card; maxQty: number } | null>(null);
 
   const sets = useSets();
   const cards = useInfiniteCards(filters, PAGE);
@@ -67,6 +70,7 @@ export function Collection() {
           sets={sets.data ?? []}
           showStatusColor
         />
+        {toast && <p className="mt-2 font-mono text-[12px] text-hud">{toast}</p>}
       </Panel>
 
       {cards.isLoading && <p className="font-mono text-sm text-muted">Cargando colección…</p>}
@@ -91,6 +95,7 @@ export function Collection() {
             onReturnLoan={(loanId, productId, maxQty, username) =>
               setReturnDlg({ loanId, productId, maxQty, username })
             }
+            onLend={(maxQty) => setLendDlg({ card, maxQty })}
           />
         ))}
         <div ref={loadMoreRef} className="col-span-full h-1" />
@@ -107,6 +112,16 @@ export function Collection() {
         <ReturnLoanDialog
           {...returnDlg}
           onClose={() => setReturnDlg(null)}
+        />
+      )}
+      {lendDlg && (
+        <LendCardDialog
+          {...lendDlg}
+          onClose={() => setLendDlg(null)}
+          onDone={(message) => {
+            setToast(message);
+            setLendDlg(null);
+          }}
         />
       )}
       <ScrollToTopButton />
