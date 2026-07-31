@@ -158,7 +158,9 @@ export function LoanHistory() {
                       >
                         Devolver todo
                       </button>
-                      {user && (user.id === loan.lenderId || user.id === loan.borrowerId) && (
+                      {user &&
+                        !loan.contactId &&
+                        (user.id === loan.lenderId || user.id === loan.borrowerId) && (
                         <button
                           type="button"
                           className="border border-amber/40 px-2 py-0.5 font-display text-[10px] uppercase text-amber"

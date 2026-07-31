@@ -13,14 +13,21 @@ function mergedStatusColor(opts: {
   return 'green';
 }
 
+function partyKey(row: LoanPartyQty): string {
+  if (row.contactId != null) return `c:${row.contactId}`;
+  if (row.userId != null) return `u:${row.userId}`;
+  return `n:${row.username}`;
+}
+
 function mergeLoanParties(rows: LoanPartyQty[]): LoanPartyQty[] {
-  const byUser = new Map<number, LoanPartyQty>();
+  const byParty = new Map<string, LoanPartyQty>();
   for (const row of rows) {
-    const prev = byUser.get(row.userId);
+    const key = partyKey(row);
+    const prev = byParty.get(key);
     if (prev) prev.qty += row.qty;
-    else byUser.set(row.userId, { ...row });
+    else byParty.set(key, { ...row });
   }
-  return [...byUser.values()].filter((r) => r.qty > 0);
+  return [...byParty.values()].filter((r) => r.qty > 0);
 }
 
 /**

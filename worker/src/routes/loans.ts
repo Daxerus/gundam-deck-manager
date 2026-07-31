@@ -6,10 +6,18 @@ import { cardRequests, returnRequests } from '../db/schema';
 import { readJson } from '../util/json';
 import { areFriends } from '../services/friends';
 import {
+  deleteLoanContact,
+  findOrCreateLoanContact,
+  listLoanContacts,
+  toPublicContact,
+} from '../services/loanContacts';
+import {
+  applyExternalLoanTransfer,
   applyLoanTransfer,
   applyReturn,
   listLoanHistory,
   listOpenLoansForUser,
+  type ExternalLoanDirection,
   type LoanItemInput,
 } from '../services/loans';
 import { findUserById } from '../services/users';
@@ -60,6 +68,67 @@ export const loansRoutes = new Hono<AppEnv>()
     const result = await applyLoanTransfer(db, {
       lenderId: userId,
       borrowerId,
+      items,
+    });
+    if (!result.ok) return c.json({ error: result.error }, result.status);
+    return c.json({ data: result }, 201);
+  })
+
+  // --- External (unregistered) contacts — before /:id routes ---
+  .get('/contacts', async (c) => {
+    const db = getDb(c.env);
+    const userId = c.get('userId')!;
+    const data = await listLoanContacts(db, userId);
+    return c.json({ data });
+  })
+
+  .post('/contacts', async (c) => {
+    const db = getDb(c.env);
+    const userId = c.get('userId')!;
+    const body = await readJson<{ nick: string }>(c);
+    const result = await findOrCreateLoanContact(db, userId, body.nick);
+    if (!result.ok) return c.json({ error: result.error }, result.status);
+    return c.json({ data: toPublicContact(result.contact) }, 201);
+  })
+
+  .delete('/contacts/:id', async (c) => {
+    const db = getDb(c.env);
+    const userId = c.get('userId')!;
+    const id = Math.floor(Number(c.req.param('id')));
+    if (!Number.isInteger(id) || id < 1) return c.json({ error: 'Invalid id' }, 400);
+    const result = await deleteLoanContact(db, userId, id);
+    if (!result.ok) return c.json({ error: result.error }, result.status);
+    return c.json({ ok: true });
+  })
+
+  .post('/external', async (c) => {
+    const db = getDb(c.env);
+    const userId = c.get('userId')!;
+    const body = await readJson<{
+      contactId?: number;
+      nick?: string;
+      direction: ExternalLoanDirection;
+      items: LoanItemInput[];
+    }>(c);
+    const direction = body.direction;
+    if (direction !== 'lent' && direction !== 'borrowed') {
+      return c.json({ error: 'Invalid direction' }, 400);
+    }
+    const contactId = body.contactId != null ? Math.floor(Number(body.contactId)) : undefined;
+    if (contactId != null && (!Number.isInteger(contactId) || contactId < 1)) {
+      return c.json({ error: 'Invalid contactId' }, 400);
+    }
+    const items = parseItems(body.items);
+    if (!items || items.length === 0) return c.json({ error: 'Invalid items' }, 400);
+    if (contactId == null && !String(body.nick ?? '').trim()) {
+      return c.json({ error: 'contactId or nick required' }, 400);
+    }
+
+    const result = await applyExternalLoanTransfer(db, {
+      ownerUserId: userId,
+      contactId,
+      nick: body.nick,
+      direction,
       items,
     });
     if (!result.ok) return c.json({ error: result.error }, result.status);

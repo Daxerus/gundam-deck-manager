@@ -16,6 +16,7 @@ import type {
   DeckSummary,
   Friendship,
   InviteCode,
+  LoanContact,
   LoanHistoryEntry,
   OpenLoan,
   Paginated,
@@ -486,6 +487,56 @@ export function useCreateLoan() {
         )
         .then((r) => r.data),
     onSuccess: () => invalidateCollectionSideEffects(qc),
+  });
+}
+
+export function useLoanContacts() {
+  return useQuery({
+    queryKey: ['loans', 'contacts'],
+    queryFn: () => api.get<{ data: LoanContact[] }>('/loans/contacts').then((r) => r.data),
+  });
+}
+
+export function useCreateLoanContact() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (nick: string) =>
+      api.post<{ data: LoanContact }>('/loans/contacts', { nick }).then((r) => r.data),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['loans', 'contacts'] }),
+  });
+}
+
+export function useDeleteLoanContact() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: number) => api.del(`/loans/contacts/${id}`),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['loans', 'contacts'] }),
+  });
+}
+
+export function useCreateExternalLoan() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (body: {
+      contactId?: number;
+      nick?: string;
+      direction: 'lent' | 'borrowed';
+      items: { productId: string; quantity: number }[];
+    }) =>
+      api
+        .post<{
+          data: {
+            loanId: number;
+            deckImpacts: { deckId: number; name: string }[];
+            contactId?: number;
+            contactNick?: string;
+          };
+        }>('/loans/external', body)
+        .then((r) => r.data),
+    onSuccess: () => {
+      invalidateCollectionSideEffects(qc);
+      qc.invalidateQueries({ queryKey: ['loans', 'contacts'] });
+    },
   });
 }
 

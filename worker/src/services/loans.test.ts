@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { normalizeNick } from './loanContacts';
 import { selectLendPrintings, type PrintingAvailability } from './loans';
 
 const printing = (
@@ -6,6 +7,21 @@ const printing = (
   free: number,
   inDecks = 0,
 ): PrintingAvailability => ({ productId, free, inDecks });
+
+describe('normalizeNick', () => {
+  it('trims and lowercases the key while keeping display nick', () => {
+    const result = normalizeNick('  Pedro  ');
+    expect(result).toEqual({ ok: true, nick: 'Pedro', nickKey: 'pedro' });
+  });
+
+  it('rejects empty nick', () => {
+    expect(normalizeNick('   ').ok).toBe(false);
+  });
+
+  it('rejects overly long nick', () => {
+    expect(normalizeNick('x'.repeat(41)).ok).toBe(false);
+  });
+});
 
 describe('selectLendPrintings', () => {
   it('uses the requested printing when it has free copies', () => {

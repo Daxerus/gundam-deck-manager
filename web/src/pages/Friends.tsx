@@ -9,9 +9,12 @@ import {
   useAcceptFriend,
   useCreateCardRequest,
   useCreateLoan,
+  useCreateLoanContact,
+  useDeleteLoanContact,
   useFriendCollectionStatus,
   useFriends,
   useInfiniteFriendCards,
+  useLoanContacts,
   useOwnedByCardNumber,
   useRemoveFriend,
   useRequestFriend,
@@ -29,8 +32,12 @@ export function Friends() {
   const [search, setSearch] = useState('');
   const [viewFriendId, setViewFriendId] = useState<number | null>(null);
   const [msg, setMsg] = useState<string | null>(null);
+  const [newNick, setNewNick] = useState('');
 
   const friends = useFriends();
+  const contacts = useLoanContacts();
+  const createContact = useCreateLoanContact();
+  const deleteContact = useDeleteLoanContact();
   const searchResults = useSearchUsers(search);
   const requestFriend = useRequestFriend();
   const acceptFriend = useAcceptFriend();
@@ -39,6 +46,7 @@ export function Friends() {
   const accepted = (friends.data ?? []).filter((f) => f.status === 'accepted');
   const incoming = (friends.data ?? []).filter((f) => f.isIncoming);
   const outgoing = (friends.data ?? []).filter((f) => f.isOutgoing);
+  const external = contacts.data ?? [];
 
   async function run(action: () => Promise<unknown>, okMsg: string) {
     setMsg(null);
@@ -183,6 +191,61 @@ export function Friends() {
                   Eliminar
                 </button>
               </div>
+            </li>
+          ))}
+        </ul>
+      </Panel>
+
+      <Panel
+        title="No registrados"
+        subtitle={`${external.length} nicks · préstamos sin confirmación`}
+      >
+        <div className="mb-3 flex flex-wrap items-end gap-2">
+          <label className="flex flex-col gap-1">
+            <span className="font-display text-[9px] uppercase tracking-[0.2em] text-muted">
+              Nuevo nick
+            </span>
+            <input
+              className="hud-input w-48"
+              placeholder="ej. Pedro"
+              value={newNick}
+              onChange={(e) => setNewNick(e.target.value)}
+            />
+          </label>
+          <button
+            type="button"
+            disabled={createContact.isPending || !newNick.trim()}
+            className="border border-ok/40 px-2 py-1 font-display text-[10px] uppercase text-ok hover:bg-ok/10 disabled:opacity-40"
+            onClick={() =>
+              void run(async () => {
+                await createContact.mutateAsync(newNick.trim());
+                setNewNick('');
+              }, `Nick guardado`)
+            }
+          >
+            Guardar
+          </button>
+        </div>
+        {contacts.isLoading && <p className="font-mono text-sm text-muted">Cargando…</p>}
+        {external.length === 0 && !contacts.isLoading && (
+          <p className="font-mono text-sm text-muted">
+            Aún no hay nicks. Guarda uno aquí o créalo al prestar / registrar una carta recibida.
+          </p>
+        )}
+        <ul className="divide-y divide-line/60">
+          {external.map((c) => (
+            <li key={c.id} className="flex items-center justify-between gap-3 py-2">
+              <span className="font-ui text-ink">{c.nick}</span>
+              <button
+                type="button"
+                className="border border-alert/40 px-2 py-0.5 font-display text-[10px] uppercase text-alert"
+                disabled={deleteContact.isPending}
+                onClick={() =>
+                  void run(() => deleteContact.mutateAsync(c.id), `${c.nick} eliminado`)
+                }
+              >
+                Eliminar
+              </button>
             </li>
           ))}
         </ul>

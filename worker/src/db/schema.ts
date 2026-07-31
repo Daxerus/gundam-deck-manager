@@ -173,7 +173,33 @@ export const friendships = sqliteTable(
   }),
 );
 
-/** Open or closed loan between two users. */
+/**
+ * Reusable nick for an unregistered person the owner lends to / borrows from.
+ * Scoped per owner; nick_key is lower(trim(nick)) for case-insensitive uniqueness.
+ */
+export const loanContacts = sqliteTable(
+  'loan_contacts',
+  {
+    id: integer('id').primaryKey({ autoIncrement: true }),
+    ownerUserId: integer('owner_user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    nick: text('nick').notNull(),
+    nickKey: text('nick_key').notNull(),
+    createdAt: integer('created_at').notNull().default(sql`(unixepoch())`),
+    updatedAt: integer('updated_at').notNull().default(sql`(unixepoch())`),
+  },
+  (t) => ({
+    uniqNick: uniqueIndex('uniq_loan_contact_nick').on(t.ownerUserId, t.nickKey),
+    byOwner: index('idx_loan_contacts_owner').on(t.ownerUserId),
+  }),
+);
+
+/**
+ * Open or closed loan between two users, or between a user and an external contact.
+ * Peer loans: contactId null, lenderId/borrowerId are the two users.
+ * External loans: contactId set, lenderId = borrowerId = owner, externalDirection = lent|borrowed.
+ */
 export const loans = sqliteTable(
   'loans',
   {
@@ -184,6 +210,9 @@ export const loans = sqliteTable(
     borrowerId: integer('borrower_id')
       .notNull()
       .references(() => users.id, { onDelete: 'cascade' }),
+    contactId: integer('contact_id').references(() => loanContacts.id, { onDelete: 'cascade' }),
+    /** null for peer loans; 'lent' | 'borrowed' from the owner user's perspective. */
+    externalDirection: text('external_direction'),
     status: text('status').notNull().default('open'), // open | closed
     createdAt: integer('created_at').notNull().default(sql`(unixepoch())`),
     updatedAt: integer('updated_at').notNull().default(sql`(unixepoch())`),
@@ -192,6 +221,13 @@ export const loans = sqliteTable(
     byLender: index('idx_loans_lender').on(t.lenderId),
     byBorrower: index('idx_loans_borrower').on(t.borrowerId),
     byPairStatus: index('idx_loans_pair_status').on(t.lenderId, t.borrowerId, t.status),
+    byContact: index('idx_loans_contact').on(t.contactId),
+    byContactDirStatus: index('idx_loans_contact_dir_status').on(
+      t.lenderId,
+      t.contactId,
+      t.externalDirection,
+      t.status,
+    ),
   }),
 );
 
@@ -227,6 +263,12 @@ export const loanTransactions = sqliteTable(
     toUserId: integer('to_user_id')
       .notNull()
       .references(() => users.id, { onDelete: 'cascade' }),
+    fromContactId: integer('from_contact_id').references(() => loanContacts.id, {
+      onDelete: 'set null',
+    }),
+    toContactId: integer('to_contact_id').references(() => loanContacts.id, {
+      onDelete: 'set null',
+    }),
     itemsJson: text('items_json').notNull(),
     deckImpactsJson: text('deck_impacts_json').notNull().default('[]'),
     createdAt: integer('created_at').notNull().default(sql`(unixepoch())`),
@@ -310,6 +352,7 @@ export type DeckRow = typeof decks.$inferSelect;
 export type DeckCardRow = typeof deckCards.$inferSelect;
 export type AllocationRow = typeof allocations.$inferSelect;
 export type FriendshipRow = typeof friendships.$inferSelect;
+export type LoanContactRow = typeof loanContacts.$inferSelect;
 export type LoanRow = typeof loans.$inferSelect;
 export type LoanItemRow = typeof loanItems.$inferSelect;
 export type LoanTransactionRow = typeof loanTransactions.$inferSelect;

@@ -48,6 +48,7 @@ export function CardTile({
   onClick,
   onReturnLoan,
   onLend,
+  onReceive,
   readOnly = false,
 }: {
   card: Card;
@@ -58,6 +59,8 @@ export function CardTile({
   onClick?: () => void;
   onReturnLoan?: (loanId: number, productId: string, maxQty: number, username: string) => void;
   onLend?: (maxQty: number) => void;
+  /** Register a card borrowed from an unregistered contact (catalog). */
+  onReceive?: () => void;
   readOnly?: boolean;
 }) {
   const cc = colorClasses(card.color);
@@ -204,7 +207,7 @@ export function CardTile({
             ))}
             {status.lentOut.map((r, index) => (
               <HelperRow
-                key={`l-${r.userId}-${r.loanId}`}
+                key={`l-${r.contactId ?? r.userId}-${r.loanId}`}
                 tone="blue"
                 label={`x${r.qty} → ${r.username}`}
                 revealOrder={helperRowCount - 1 - (status.decks.length + index)}
@@ -227,7 +230,7 @@ export function CardTile({
             ))}
             {status.borrowedIn.map((r, index) => (
               <HelperRow
-                key={`b-${r.userId}-${r.loanId}`}
+                key={`b-${r.contactId ?? r.userId}-${r.loanId}`}
                 tone="purple"
                 label={`x${r.qty} ← ${r.username}`}
                 revealOrder={
@@ -286,6 +289,15 @@ export function CardTile({
             onChangeOwned(nextOwned);
           }}
         />
+      )}
+      {onReceive && !readOnly && (
+        <button
+          type="button"
+          onClick={onReceive}
+          className="flex w-full items-center justify-center border-t border-borrow/40 px-2 py-1 font-display text-[10px] uppercase tracking-[0.14em] text-borrow hover:bg-borrow/10"
+        >
+          Recibir prestado
+        </button>
       )}
       {footer}
     </div>

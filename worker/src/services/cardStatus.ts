@@ -1,6 +1,15 @@
 export type StatusColor = 'green' | 'yellow' | 'red';
 
-export type LoanPartyQty = { userId: number; username: string; qty: number; loanId: number };
+export type LoanPartyQty = {
+  /** Registered counterparty; null for external contacts. */
+  userId: number | null;
+  /** External contact id; null for registered users. */
+  contactId: number | null;
+  /** Username or external nick. */
+  username: string;
+  qty: number;
+  loanId: number;
+};
 
 export type CardStatusBreakdown = {
   productId: string;
@@ -79,15 +88,22 @@ export function buildCardStatusBreakdown(input: {
   };
 }
 
-/** Group loan party rows by userId, summing qty (keeps first loanId). */
+function partyKey(r: LoanPartyQty): string {
+  if (r.contactId != null) return `c:${r.contactId}`;
+  if (r.userId != null) return `u:${r.userId}`;
+  return `n:${r.username}`;
+}
+
+/** Group loan party rows by user or contact, summing qty (keeps first loanId). */
 export function groupLoanParties(rows: LoanPartyQty[]): LoanPartyQty[] {
-  const map = new Map<number, LoanPartyQty>();
+  const map = new Map<string, LoanPartyQty>();
   for (const r of rows) {
-    const prev = map.get(r.userId);
+    const key = partyKey(r);
+    const prev = map.get(key);
     if (prev) {
       prev.qty += r.qty;
     } else {
-      map.set(r.userId, { ...r });
+      map.set(key, { ...r });
     }
   }
   return [...map.values()].filter((r) => r.qty > 0);

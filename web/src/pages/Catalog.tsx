@@ -18,6 +18,7 @@ import { useLoadMoreOnScroll } from '../lib/useLoadMoreOnScroll';
 import { ApiError } from '../lib/api';
 import type { Card, CardStatusBreakdown } from '../lib/types';
 import { ReturnLoanDialog } from '../components/ReturnLoanDialog';
+import { ReceiveCardDialog } from '../components/ReceiveCardDialog';
 import { ScrollToTopButton } from '../components/ScrollToTopButton';
 
 const PAGE = 60;
@@ -30,12 +31,14 @@ export function Catalog() {
   });
   const [detail, setDetail] = useState<Card | null>(null);
   const [syncError, setSyncError] = useState<string | null>(null);
+  const [toast, setToast] = useState<string | null>(null);
   const [returnDlg, setReturnDlg] = useState<{
     loanId: number;
     productId: string;
     maxQty: number;
     username: string;
   } | null>(null);
+  const [receiveDlg, setReceiveDlg] = useState<Card | null>(null);
 
   const status = useStatus();
   const sets = useSets();
@@ -83,6 +86,7 @@ export function Catalog() {
         className="z-20"
       >
         <Filters filters={filters} onChange={updateFilters} sets={sets.data ?? []} />
+        {toast && <p className="mt-2 font-mono text-[12px] text-hud">{toast}</p>}
       </Panel>
 
       {cards.isLoading && <p className="font-mono text-sm text-muted">Cargando cartas…</p>}
@@ -127,6 +131,7 @@ export function Catalog() {
             onReturnLoan={(loanId, productId, maxQty, username) =>
               setReturnDlg({ loanId, productId, maxQty, username })
             }
+            onReceive={(selected) => setReceiveDlg(selected)}
           />
         ))}
         <div ref={loadMoreRef} className="col-span-full h-1" />
@@ -140,6 +145,16 @@ export function Catalog() {
 
       {detail && <CardDetailModal card={detail} onClose={() => setDetail(null)} />}
       {returnDlg && <ReturnLoanDialog {...returnDlg} onClose={() => setReturnDlg(null)} />}
+      {receiveDlg && (
+        <ReceiveCardDialog
+          card={receiveDlg}
+          onClose={() => setReceiveDlg(null)}
+          onDone={(message) => {
+            setToast(message);
+            setReceiveDlg(null);
+          }}
+        />
+      )}
       <ScrollToTopButton />
     </div>
   );
@@ -152,6 +167,7 @@ function CatalogCardTile({
   onChangeOwned,
   onOpenDetail,
   onReturnLoan,
+  onReceive,
 }: {
   card: Card;
   owned: (productId: string) => number;
@@ -159,6 +175,7 @@ function CatalogCardTile({
   onChangeOwned: (productId: string, quantity: number) => void;
   onOpenDetail: (card: Card) => void;
   onReturnLoan: (loanId: number, productId: string, maxQty: number, username: string) => void;
+  onReceive: (card: Card) => void;
 }) {
   const variants = card.variants?.length ? card.variants : [card];
   const [variantIndex, setVariantIndex] = useState(0);
@@ -174,6 +191,7 @@ function CatalogCardTile({
       onChangeOwned={(next) => onChangeOwned(selected.productId, next)}
       onClick={() => onOpenDetail(selected)}
       onReturnLoan={onReturnLoan}
+      onReceive={() => onReceive(selected)}
       footer={
         hasAlternates ? (
           <button

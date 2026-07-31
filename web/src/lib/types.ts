@@ -163,10 +163,21 @@ export interface CardLocation {
 export type StatusColor = 'green' | 'yellow' | 'red';
 
 export interface LoanPartyQty {
-  userId: number;
+  /** Registered counterparty; null for external contacts. */
+  userId: number | null;
+  /** External contact id; null for registered users. */
+  contactId: number | null;
+  /** Username or external nick. */
   username: string;
   qty: number;
   loanId: number;
+}
+
+export interface LoanContact {
+  id: number;
+  nick: string;
+  createdAt: number;
+  updatedAt: number;
 }
 
 export interface CardStatusBreakdown {
@@ -197,10 +208,12 @@ export interface LoanHistoryEntry {
   id: number;
   type: string;
   loanId: number | null;
-  fromUserId: number;
+  fromUserId: number | null;
   fromUsername: string;
-  toUserId: number;
+  fromContactId?: number | null;
+  toUserId: number | null;
   toUsername: string;
+  toContactId?: number | null;
   items: { productId: string; quantity: number }[];
   deckImpacts: { deckId: number; name: string }[];
   direction: string;
@@ -209,10 +222,12 @@ export interface LoanHistoryEntry {
 
 export interface OpenLoan {
   id: number;
-  lenderId: number;
+  lenderId: number | null;
   lenderUsername: string;
-  borrowerId: number;
+  borrowerId: number | null;
   borrowerUsername: string;
+  contactId?: number | null;
+  externalDirection?: string | null;
   status: string;
   createdAt: number;
   updatedAt: number;

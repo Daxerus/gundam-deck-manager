@@ -26,8 +26,8 @@ describe('buildCardStatusBreakdown', () => {
       productId: 'P1',
       owned: 3,
       deckAlloc: [{ deckId: 1, name: 'Mazo 1', qty: 1 }],
-      lentOut: [{ userId: 2, username: 'bob', qty: 1, loanId: 10 }],
-      borrowedIn: [{ userId: 3, username: 'cara', qty: 1, loanId: 11 }],
+      lentOut: [{ userId: 2, contactId: null, username: 'bob', qty: 1, loanId: 10 }],
+      borrowedIn: [{ userId: 3, contactId: null, username: 'cara', qty: 1, loanId: 11 }],
     });
     expect(status.displayQty).toBe(4); // 3 owned + 1 lent
     expect(status.ownTotal).toBe(3); // 3-1 borrowed + 1 lent = 3
@@ -54,13 +54,25 @@ describe('buildCardStatusBreakdown', () => {
 describe('groupLoanParties', () => {
   it('groups by user', () => {
     const grouped = groupLoanParties([
-      { userId: 1, username: 'a', qty: 1, loanId: 1 },
-      { userId: 1, username: 'a', qty: 2, loanId: 2 },
-      { userId: 2, username: 'b', qty: 1, loanId: 3 },
+      { userId: 1, contactId: null, username: 'a', qty: 1, loanId: 1 },
+      { userId: 1, contactId: null, username: 'a', qty: 2, loanId: 2 },
+      { userId: 2, contactId: null, username: 'b', qty: 1, loanId: 3 },
     ]);
     expect(grouped).toEqual([
-      { userId: 1, username: 'a', qty: 3, loanId: 1 },
-      { userId: 2, username: 'b', qty: 1, loanId: 3 },
+      { userId: 1, contactId: null, username: 'a', qty: 3, loanId: 1 },
+      { userId: 2, contactId: null, username: 'b', qty: 1, loanId: 3 },
+    ]);
+  });
+
+  it('groups by contact separately from users', () => {
+    const grouped = groupLoanParties([
+      { userId: null, contactId: 9, username: 'Pedro', qty: 1, loanId: 1 },
+      { userId: null, contactId: 9, username: 'Pedro', qty: 2, loanId: 2 },
+      { userId: 4, contactId: null, username: 'bob', qty: 1, loanId: 3 },
+    ]);
+    expect(grouped).toEqual([
+      { userId: null, contactId: 9, username: 'Pedro', qty: 3, loanId: 1 },
+      { userId: 4, contactId: null, username: 'bob', qty: 1, loanId: 3 },
     ]);
   });
 });

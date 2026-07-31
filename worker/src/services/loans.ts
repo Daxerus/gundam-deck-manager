@@ -1,9 +1,10 @@
-import { and, desc, eq, inArray, or, sql } from 'drizzle-orm';
+import { and, desc, eq, inArray, isNull, or, sql } from 'drizzle-orm';
 import type { DB } from '../db/client';
 import {
   allocations,
   collectionItems,
   decks,
+  loanContacts,
   loanItems,
   loans,
   loanTransactions,
@@ -22,9 +23,11 @@ import {
   isDeckComplete,
   loadDeckStates,
 } from './deckState';
+import { findLoanContactById, findOrCreateLoanContact } from './loanContacts';
 
 export type LoanItemInput = { productId: string; quantity: number };
 export type DeckImpact = { deckId: number; name: string };
+export type ExternalLoanDirection = 'lent' | 'borrowed';
 
 export type TransferResult =
   | {
@@ -181,13 +184,52 @@ async function findOrCreateOpenLoan(
     .select()
     .from(loans)
     .where(
-      and(eq(loans.lenderId, lenderId), eq(loans.borrowerId, borrowerId), eq(loans.status, 'open')),
+      and(
+        eq(loans.lenderId, lenderId),
+        eq(loans.borrowerId, borrowerId),
+        eq(loans.status, 'open'),
+        isNull(loans.contactId),
+      ),
     )
     .get();
   if (existing) return existing.id;
   const row = await db
     .insert(loans)
     .values({ lenderId, borrowerId, status: 'open' })
+    .returning()
+    .get();
+  return row.id;
+}
+
+async function findOrCreateOpenExternalLoan(
+  db: DB,
+  ownerUserId: number,
+  contactId: number,
+  direction: ExternalLoanDirection,
+): Promise<number> {
+  const existing = await db
+    .select()
+    .from(loans)
+    .where(
+      and(
+        eq(loans.lenderId, ownerUserId),
+        eq(loans.borrowerId, ownerUserId),
+        eq(loans.contactId, contactId),
+        eq(loans.externalDirection, direction),
+        eq(loans.status, 'open'),
+      ),
+    )
+    .get();
+  if (existing) return existing.id;
+  const row = await db
+    .insert(loans)
+    .values({
+      lenderId: ownerUserId,
+      borrowerId: ownerUserId,
+      contactId,
+      externalDirection: direction,
+      status: 'open',
+    })
     .returning()
     .get();
   return row.id;
@@ -384,6 +426,111 @@ export async function applyLoanTransfer(
   };
 }
 
+/**
+ * Direct lend/borrow with an unregistered contact (no confirmation).
+ * `lent`: remove copies from owner. `borrowed`: add copies to owner.
+ */
+export async function applyExternalLoanTransfer(
+  db: DB,
+  opts: {
+    ownerUserId: number;
+    contactId?: number;
+    nick?: string;
+    direction: ExternalLoanDirection;
+    items: LoanItemInput[];
+  },
+): Promise<TransferResult & { contactId?: number; contactNick?: string }> {
+  if (opts.direction !== 'lent' && opts.direction !== 'borrowed') {
+    return { ok: false, error: 'Invalid direction', status: 400 };
+  }
+
+  let contact =
+    opts.contactId != null
+      ? await findLoanContactById(db, opts.ownerUserId, opts.contactId)
+      : null;
+  if (opts.contactId != null && !contact) {
+    return { ok: false, error: 'Contact not found', status: 404 };
+  }
+  if (!contact) {
+    const created = await findOrCreateLoanContact(db, opts.ownerUserId, opts.nick);
+    if (!created.ok) return { ok: false, error: created.error, status: created.status };
+    contact = created.contact;
+  }
+
+  const requested = normalizeItems(opts.items);
+  if (requested.length === 0) return { ok: false, error: 'No items to lend', status: 400 };
+
+  const allImpacts: DeckImpact[] = [];
+  const impactKeys = new Set<string>();
+  let items: LoanItemInput[];
+
+  if (opts.direction === 'lent') {
+    const resolution = await resolveLendItems(db, opts.ownerUserId, requested);
+    if (!resolution.ok) return { ok: false, error: resolution.error, status: 400 };
+    items = resolution.items;
+
+    for (const item of items) {
+      const result = await releaseCopies(db, opts.ownerUserId, item.productId, item.quantity);
+      if (result.released < 0) {
+        return {
+          ok: false,
+          error: `Not enough copies of ${item.productId} to lend`,
+          status: 400,
+        };
+      }
+      for (const d of result.deckImpacts) {
+        const key = `${d.deckId}`;
+        if (!impactKeys.has(key)) {
+          impactKeys.add(key);
+          allImpacts.push(d);
+        }
+      }
+    }
+  } else {
+    items = requested;
+    for (const item of items) {
+      await addToCollection(db, opts.ownerUserId, item.productId, item.quantity);
+    }
+  }
+
+  const loanId = await findOrCreateOpenExternalLoan(
+    db,
+    opts.ownerUserId,
+    contact.id,
+    opts.direction,
+  );
+  for (const item of items) {
+    await upsertLoanItem(db, loanId, item.productId, item.quantity);
+  }
+
+  const now = Math.floor(Date.now() / 1000);
+  await db.update(loans).set({ updatedAt: now }).where(eq(loans.id, loanId));
+
+  const tx = await db
+    .insert(loanTransactions)
+    .values({
+      type: 'lend',
+      loanId,
+      fromUserId: opts.ownerUserId,
+      toUserId: opts.ownerUserId,
+      fromContactId: opts.direction === 'borrowed' ? contact.id : null,
+      toContactId: opts.direction === 'lent' ? contact.id : null,
+      itemsJson: JSON.stringify(items),
+      deckImpactsJson: JSON.stringify(allImpacts),
+    })
+    .returning()
+    .get();
+
+  return {
+    ok: true,
+    loanId,
+    transactionId: tx.id,
+    deckImpacts: allImpacts,
+    contactId: contact.id,
+    contactNick: contact.nick,
+  };
+}
+
 /** Return copies from borrower to lender (partial or full). */
 export async function applyReturn(
   db: DB,
@@ -419,24 +566,48 @@ export async function applyReturn(
 
   const allImpacts: DeckImpact[] = [];
   const impactKeys = new Set<string>();
+  const isExternal = loan.contactId != null;
+  const externalDirection = loan.externalDirection as ExternalLoanDirection | null;
 
   for (const item of items) {
-    const result = await releaseCopies(db, loan.borrowerId, item.productId, item.quantity);
-    if (result.released < 0) {
-      return {
-        ok: false,
-        error: `Borrower does not have enough copies of ${item.productId} to return`,
-        status: 400,
-      };
-    }
-    for (const d of result.deckImpacts) {
-      const key = `${d.deckId}`;
-      if (!impactKeys.has(key)) {
-        impactKeys.add(key);
-        allImpacts.push(d);
+    if (isExternal && externalDirection === 'lent') {
+      // Copies come back from an offline person: just restore owner's collection.
+      await addToCollection(db, opts.actorUserId, item.productId, item.quantity);
+    } else if (isExternal && externalDirection === 'borrowed') {
+      // Returning borrowed copies to an offline person: remove from owner's collection.
+      const result = await releaseCopies(db, opts.actorUserId, item.productId, item.quantity);
+      if (result.released < 0) {
+        return {
+          ok: false,
+          error: `Not enough copies of ${item.productId} to return`,
+          status: 400,
+        };
       }
+      for (const d of result.deckImpacts) {
+        const key = `${d.deckId}`;
+        if (!impactKeys.has(key)) {
+          impactKeys.add(key);
+          allImpacts.push(d);
+        }
+      }
+    } else {
+      const result = await releaseCopies(db, loan.borrowerId, item.productId, item.quantity);
+      if (result.released < 0) {
+        return {
+          ok: false,
+          error: `Borrower does not have enough copies of ${item.productId} to return`,
+          status: 400,
+        };
+      }
+      for (const d of result.deckImpacts) {
+        const key = `${d.deckId}`;
+        if (!impactKeys.has(key)) {
+          impactKeys.add(key);
+          allImpacts.push(d);
+        }
+      }
+      await addToCollection(db, loan.lenderId, item.productId, item.quantity);
     }
-    await addToCollection(db, loan.lenderId, item.productId, item.quantity);
 
     const open = openByProduct.get(item.productId)!;
     const next = open.quantity - item.quantity;
@@ -462,8 +633,10 @@ export async function applyReturn(
     .values({
       type: 'return',
       loanId: loan.id,
-      fromUserId: loan.borrowerId,
-      toUserId: loan.lenderId,
+      fromUserId: isExternal ? opts.actorUserId : loan.borrowerId,
+      toUserId: isExternal ? opts.actorUserId : loan.lenderId,
+      fromContactId: isExternal && externalDirection === 'lent' ? loan.contactId : null,
+      toContactId: isExternal && externalDirection === 'borrowed' ? loan.contactId : null,
       itemsJson: JSON.stringify(items),
       deckImpactsJson: JSON.stringify(allImpacts),
     })
@@ -515,7 +688,12 @@ async function loadLoanSides(
   const loanIds = openLoans.map((l) => l.id);
   const items = await db.select().from(loanItems).where(inArray(loanItems.loanId, loanIds)).all();
   const otherIds = new Set<number>();
+  const contactIds = new Set<number>();
   for (const l of openLoans) {
+    if (l.contactId != null) {
+      contactIds.add(l.contactId);
+      continue;
+    }
     otherIds.add(l.lenderId === userId ? l.borrowerId : l.lenderId);
   }
   const otherUsers =
@@ -527,16 +705,48 @@ async function loadLoanSides(
           .where(inArray(users.id, [...otherIds]))
           .all();
   const nameById = new Map(otherUsers.map((u) => [u.id, u.username]));
+  const contactRows =
+    contactIds.size === 0
+      ? []
+      : await db
+          .select({ id: loanContacts.id, nick: loanContacts.nick })
+          .from(loanContacts)
+          .where(inArray(loanContacts.id, [...contactIds]))
+          .all();
+  const nickById = new Map(contactRows.map((c) => [c.id, c.nick]));
 
   const loanById = new Map(openLoans.map((l) => [l.id, l]));
   for (const item of items) {
     if (item.quantity <= 0) continue;
     const loan = loanById.get(item.loanId);
     if (!loan) continue;
+
+    if (loan.contactId != null) {
+      const nick = nickById.get(loan.contactId) ?? `contact-${loan.contactId}`;
+      const party: LoanPartyQty = {
+        userId: null,
+        contactId: loan.contactId,
+        username: nick,
+        qty: item.quantity,
+        loanId: loan.id,
+      };
+      if (loan.externalDirection === 'lent') {
+        const list = lentOutByProduct.get(item.productId) ?? [];
+        list.push(party);
+        lentOutByProduct.set(item.productId, list);
+      } else if (loan.externalDirection === 'borrowed') {
+        const list = borrowedInByProduct.get(item.productId) ?? [];
+        list.push(party);
+        borrowedInByProduct.set(item.productId, list);
+      }
+      continue;
+    }
+
     if (loan.lenderId === userId) {
       const list = lentOutByProduct.get(item.productId) ?? [];
       list.push({
         userId: loan.borrowerId,
+        contactId: null,
         username: nameById.get(loan.borrowerId) ?? `user-${loan.borrowerId}`,
         qty: item.quantity,
         loanId: loan.id,
@@ -546,6 +756,7 @@ async function loadLoanSides(
       const list = borrowedInByProduct.get(item.productId) ?? [];
       list.push({
         userId: loan.lenderId,
+        contactId: null,
         username: nameById.get(loan.lenderId) ?? `user-${loan.lenderId}`,
         qty: item.quantity,
         loanId: loan.id,
@@ -629,11 +840,15 @@ export async function listLoanHistory(db: DB, userId: number, limit = 100) {
       loanId: loanTransactions.loanId,
       fromUserId: loanTransactions.fromUserId,
       toUserId: loanTransactions.toUserId,
+      fromContactId: loanTransactions.fromContactId,
+      toContactId: loanTransactions.toContactId,
       itemsJson: loanTransactions.itemsJson,
       deckImpactsJson: loanTransactions.deckImpactsJson,
       createdAt: loanTransactions.createdAt,
       fromUsername: sql<string>`(select username from users where id = ${loanTransactions.fromUserId})`,
       toUsername: sql<string>`(select username from users where id = ${loanTransactions.toUserId})`,
+      fromContactNick: sql<string | null>`(select nick from loan_contacts where id = ${loanTransactions.fromContactId})`,
+      toContactNick: sql<string | null>`(select nick from loan_contacts where id = ${loanTransactions.toContactId})`,
     })
     .from(loanTransactions)
     .where(or(eq(loanTransactions.fromUserId, userId), eq(loanTransactions.toUserId, userId))!)
@@ -654,22 +869,36 @@ export async function listLoanHistory(db: DB, userId: number, limit = 100) {
     } catch {
       deckImpacts = [];
     }
-    const direction =
-      r.type === 'lend'
-        ? r.fromUserId === userId
-          ? 'lent'
-          : 'borrowed'
-        : r.toUserId === userId
-          ? 'received_return'
-          : 'returned';
+    const isExternal = r.fromContactId != null || r.toContactId != null;
+    const fromUsername = r.fromContactNick ?? r.fromUsername ?? '';
+    const toUsername = r.toContactNick ?? r.toUsername ?? '';
+    let direction: string;
+    if (isExternal) {
+      if (r.type === 'lend') {
+        direction = r.toContactId != null ? 'lent' : 'borrowed';
+      } else {
+        direction = r.fromContactId != null ? 'received_return' : 'returned';
+      }
+    } else {
+      direction =
+        r.type === 'lend'
+          ? r.fromUserId === userId
+            ? 'lent'
+            : 'borrowed'
+          : r.toUserId === userId
+            ? 'received_return'
+            : 'returned';
+    }
     return {
       id: r.id,
       type: r.type,
       loanId: r.loanId,
-      fromUserId: r.fromUserId,
-      fromUsername: r.fromUsername,
-      toUserId: r.toUserId,
-      toUsername: r.toUsername,
+      fromUserId: r.fromContactId != null ? null : r.fromUserId,
+      fromUsername,
+      fromContactId: r.fromContactId,
+      toUserId: r.toContactId != null ? null : r.toUserId,
+      toUsername,
+      toContactId: r.toContactId,
       items,
       deckImpacts,
       direction,
@@ -701,29 +930,64 @@ export async function listOpenLoansForUser(db: DB, userId: number) {
     byLoan.set(it.loanId, list);
   }
 
-  const userIds = new Set<number>();
+  const userIds = new Set<number>([userId]);
+  const contactIds = new Set<number>();
   for (const l of open) {
-    userIds.add(l.lenderId);
-    userIds.add(l.borrowerId);
+    if (l.contactId != null) {
+      contactIds.add(l.contactId);
+    } else {
+      userIds.add(l.lenderId);
+      userIds.add(l.borrowerId);
+    }
   }
-  const names = await db
-    .select({ id: users.id, username: users.username })
-    .from(users)
-    .where(inArray(users.id, [...userIds]))
-    .all();
+  const names =
+    userIds.size === 0
+      ? []
+      : await db
+          .select({ id: users.id, username: users.username })
+          .from(users)
+          .where(inArray(users.id, [...userIds]))
+          .all();
   const nameById = new Map(names.map((u) => [u.id, u.username]));
+  const contacts =
+    contactIds.size === 0
+      ? []
+      : await db
+          .select({ id: loanContacts.id, nick: loanContacts.nick })
+          .from(loanContacts)
+          .where(inArray(loanContacts.id, [...contactIds]))
+          .all();
+  const nickById = new Map(contacts.map((c) => [c.id, c.nick]));
 
-  return open.map((l) => ({
-    id: l.id,
-    lenderId: l.lenderId,
-    lenderUsername: nameById.get(l.lenderId) ?? '',
-    borrowerId: l.borrowerId,
-    borrowerUsername: nameById.get(l.borrowerId) ?? '',
-    status: l.status,
-    createdAt: l.createdAt,
-    updatedAt: l.updatedAt,
-    items: (byLoan.get(l.id) ?? [])
-      .filter((i) => i.quantity > 0)
-      .map((i) => ({ productId: i.productId, quantity: i.quantity })),
-  }));
+  return open.map((l) => {
+    const isExternal = l.contactId != null;
+    const nick = l.contactId != null ? (nickById.get(l.contactId) ?? '') : '';
+    const lenderUsername =
+      isExternal && l.externalDirection === 'borrowed'
+        ? nick
+        : isExternal
+          ? nameById.get(userId) ?? ''
+          : (nameById.get(l.lenderId) ?? '');
+    const borrowerUsername =
+      isExternal && l.externalDirection === 'lent'
+        ? nick
+        : isExternal
+          ? nameById.get(userId) ?? ''
+          : (nameById.get(l.borrowerId) ?? '');
+    return {
+      id: l.id,
+      lenderId: isExternal && l.externalDirection === 'borrowed' ? null : l.lenderId,
+      lenderUsername,
+      borrowerId: isExternal && l.externalDirection === 'lent' ? null : l.borrowerId,
+      borrowerUsername,
+      contactId: l.contactId,
+      externalDirection: l.externalDirection,
+      status: l.status,
+      createdAt: l.createdAt,
+      updatedAt: l.updatedAt,
+      items: (byLoan.get(l.id) ?? [])
+        .filter((i) => i.quantity > 0)
+        .map((i) => ({ productId: i.productId, quantity: i.quantity })),
+    };
+  });
 }
