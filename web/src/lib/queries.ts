@@ -47,18 +47,26 @@ export interface CardFilters {
   offset?: number;
 }
 
-function invalidateCollectionSideEffects(qc: QueryClient) {
+/** Qty +/- only needs collection maps + card lists — not decks/loans/shopping. */
+function invalidateCollectionMaps(qc: QueryClient) {
   qc.invalidateQueries({ queryKey: ['collection'] });
   qc.invalidateQueries({ queryKey: ['collection-status'] });
   qc.invalidateQueries({ queryKey: ['cards'] });
+  qc.invalidateQueries({ queryKey: ['friend-collection'] });
+  qc.invalidateQueries({ queryKey: ['friend-cards'] });
+}
+
+/** Loans / returns also reshuffle decks, locations, and loan lists. */
+function invalidateCollectionSideEffects(qc: QueryClient) {
+  invalidateCollectionMaps(qc);
   qc.invalidateQueries({ queryKey: ['decks'] });
   qc.invalidateQueries({ queryKey: ['deck'] });
   qc.invalidateQueries({ queryKey: ['locations'] });
   qc.invalidateQueries({ queryKey: ['shopping'] });
   qc.invalidateQueries({ queryKey: ['loans'] });
-  qc.invalidateQueries({ queryKey: ['friend-collection'] });
-  qc.invalidateQueries({ queryKey: ['friend-cards'] });
 }
+
+const COLLECTION_STALE_MS = 3 * 60_000;
 
 function qs(params: Record<string, unknown>): string {
   const sp = new URLSearchParams();
@@ -67,6 +75,15 @@ function qs(params: Record<string, unknown>): string {
   }
   const s = sp.toString();
   return s ? `?${s}` : '';
+}
+
+/** Prefer hasMore (limit+1 pagination) when present; fall back to total for older endpoints. */
+function nextPageOffset(last: Paginated<unknown>): number | undefined {
+  const next = last._meta.offset + last._meta.count;
+  if (typeof last._meta.hasMore === 'boolean') {
+    return last._meta.hasMore ? next : undefined;
+  }
+  return next < last._meta.total ? next : undefined;
 }
 
 export function useStatus() {
@@ -119,10 +136,7 @@ export function useInfiniteCards(filters: CardFilters, pageSize = 60) {
       api.get<Paginated<Card>>(
         `/cards${qs({ ...stable, limit: pageSize, offset: pageParam } as Record<string, unknown>)}`,
       ),
-    getNextPageParam: (last) => {
-      const next = last._meta.offset + last._meta.count;
-      return next < last._meta.total ? next : undefined;
-    },
+    getNextPageParam: nextPageOffset,
   });
 }
 
@@ -130,6 +144,7 @@ export function useCollection() {
   return useQuery({
     queryKey: ['collection'],
     queryFn: () => api.get<{ data: Record<string, number> }>('/collection').then((r) => r.data),
+    staleTime: COLLECTION_STALE_MS,
   });
 }
 
@@ -139,6 +154,7 @@ export function useOwnedByCardNumber() {
     queryKey: ['collection', 'owned-by-card'],
     queryFn: () =>
       api.get<{ data: Record<string, number> }>('/collection/owned-by-card').then((r) => r.data),
+    staleTime: COLLECTION_STALE_MS,
   });
 }
 
@@ -147,6 +163,7 @@ export function useCollectionStatus() {
     queryKey: ['collection-status'],
     queryFn: () =>
       api.get<{ data: Record<string, CardStatusBreakdown> }>('/collection/status').then((r) => r.data),
+    staleTime: COLLECTION_STALE_MS,
   });
 }
 
@@ -158,7 +175,7 @@ export function useSetCollection() {
         quantity,
       }),
     onSuccess: () => {
-      invalidateCollectionSideEffects(qc);
+      invalidateCollectionMaps(qc);
     },
   });
 }
@@ -308,10 +325,7 @@ export function useInfiniteLocations(query = '', pageSize = 60) {
       api.get<Paginated<CardLocation>>(
         `/locations${qs({ limit: pageSize, offset: pageParam, q: q || undefined })}`,
       ),
-    getNextPageParam: (last) => {
-      const next = last._meta.offset + last._meta.count;
-      return next < last._meta.total ? next : undefined;
-    },
+    getNextPageParam: nextPageOffset,
   });
 }
 
@@ -422,6 +436,7 @@ export function useFriendCollectionStatus(friendUserId: number | null) {
   return useQuery({
     queryKey: ['friend-collection', friendUserId, 'status'],
     enabled: friendUserId != null,
+    staleTime: COLLECTION_STALE_MS,
     queryFn: () =>
       api
         .get<{
@@ -448,10 +463,7 @@ export function useInfiniteFriendCards(
       api.get<Paginated<Card>>(
         `/friends/${friendUserId}/cards${qs({ ...stable, limit: pageSize, offset: pageParam } as Record<string, unknown>)}`,
       ),
-    getNextPageParam: (last) => {
-      const next = last._meta.offset + last._meta.count;
-      return next < last._meta.total ? next : undefined;
-    },
+    getNextPageParam: nextPageOffset,
   });
 }
 

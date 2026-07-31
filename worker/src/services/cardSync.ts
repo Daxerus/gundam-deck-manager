@@ -2,6 +2,7 @@ import { sql } from 'drizzle-orm';
 import type { DB } from '../db/client';
 import { cards, meta } from '../db/schema';
 import type { Env } from '../env';
+import { buildFacetsFromCards, storeFacets } from './cardFacets';
 
 interface BulkCard {
   product_id: string;
@@ -73,6 +74,9 @@ export async function syncCards(db: DB, env: Env): Promise<SyncResult> {
     .insert(meta)
     .values({ key: 'last_sync', value: String(Math.floor(Date.now() / 1000)) })
     .onConflictDoUpdate({ target: meta.key, set: { value: String(Math.floor(Date.now() / 1000)) } });
+
+  // Materialize filter facets once so list endpoints avoid full-catalog scans.
+  await storeFacets(db, buildFacetsFromCards(rows));
 
   return { version, cardCount: rows.length, upserted };
 }

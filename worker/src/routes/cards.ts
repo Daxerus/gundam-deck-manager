@@ -1,9 +1,15 @@
 import { Hono } from 'hono';
-import { asc, eq, sql, count } from 'drizzle-orm';
+import { asc, eq, count } from 'drizzle-orm';
 import type { AppEnv } from '../auth';
 import { getDb } from '../db/client';
 import { cards, meta } from '../db/schema';
 import { listCards, serializeCard } from '../services/cardList';
+import {
+  getRaritiesFacet,
+  getSetsFacet,
+  getSourceTitlesFacet,
+  getTraitsFacet,
+} from '../services/cardFacets';
 
 export { serializeCard };
 
@@ -35,90 +41,32 @@ export const cardsRoutes = new Hono<AppEnv>()
     return c.json({ data: serializeCard(row) });
   })
 
-  // GET /api/sets — distinct sets with counts
+  // GET /api/sets — distinct sets with counts (from meta facets when available)
   .get('/sets', async (c) => {
     const db = getDb(c.env);
-    // A set_code holds several set_name values, because promos and other-product
-    // printings carry a generic label ("Promotion card", "Other Product Card") next to
-    // the real set name. Pick the most common label so the filter shows e.g.
-    // "GD05 · Freedom Ascension" rather than whichever name sorts last.
-    const rows = await db
-      .select({
-        setCode: cards.setCode,
-        // `cards.set_code` is spelled out rather than interpolated: Drizzle omits the
-        // table qualifier inside a projection, and a bare "set_code" would bind to c2,
-        // making the correlation a no-op.
-        setName: sql<string | null>`(
-          select c2.set_name
-          from cards c2
-          where c2.set_code = cards.set_code and c2.set_name is not null
-          group by c2.set_name
-          order by count(*) desc, c2.set_name asc
-          limit 1
-        )`,
-        count: count(),
-      })
-      .from(cards)
-      .groupBy(cards.setCode)
-      .orderBy(asc(cards.setCode))
-      .all();
-    return c.json({ data: rows });
+    const data = await getSetsFacet(db);
+    return c.json({ data });
   })
 
-  // GET /api/source-titles — distinct series (source_title) for filters
+  // GET /api/source-titles — distinct series for filters
   .get('/source-titles', async (c) => {
     const db = getDb(c.env);
-    const rows = await db
-      .select({
-        sourceTitle: cards.sourceTitle,
-        count: count(),
-      })
-      .from(cards)
-      .where(sql`${cards.sourceTitle} is not null and ${cards.sourceTitle} != ''`)
-      .groupBy(cards.sourceTitle)
-      .orderBy(asc(cards.sourceTitle))
-      .all();
-    return c.json({
-      data: rows.map((r) => ({
-        sourceTitle: r.sourceTitle as string,
-        count: r.count,
-      })),
-    });
+    const data = await getSourceTitlesFacet(db);
+    return c.json({ data });
   })
 
-  // GET /api/traits — distinct traits (from JSON array) for filters
+  // GET /api/traits — distinct traits for filters
   .get('/traits', async (c) => {
-    const result = await c.env.DB.prepare(
-      `SELECT json_each.value AS trait, COUNT(*) AS count
-       FROM cards, json_each(cards.traits)
-       WHERE cards.traits IS NOT NULL
-         AND json_each.value IS NOT NULL
-         AND json_each.value != ''
-       GROUP BY json_each.value
-       ORDER BY json_each.value`,
-    ).all<{ trait: string; count: number }>();
-    return c.json({ data: result.results ?? [] });
+    const db = getDb(c.env);
+    const data = await getTraitsFacet(db, c.env.DB);
+    return c.json({ data });
   })
 
   // GET /api/rarities — distinct rarities for filters
   .get('/rarities', async (c) => {
     const db = getDb(c.env);
-    const rows = await db
-      .select({
-        rarity: cards.rarity,
-        count: count(),
-      })
-      .from(cards)
-      .where(sql`${cards.rarity} is not null and ${cards.rarity} != ''`)
-      .groupBy(cards.rarity)
-      .orderBy(asc(cards.rarity))
-      .all();
-    return c.json({
-      data: rows.map((r) => ({
-        rarity: r.rarity as string,
-        count: r.count,
-      })),
-    });
+    const data = await getRaritiesFacet(db);
+    return c.json({ data });
   })
 
   // GET /api/status — catalog + dataset info

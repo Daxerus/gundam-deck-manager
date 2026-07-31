@@ -5,6 +5,7 @@ import type { SetInfo } from '../lib/types';
 import { CARD_COLORS } from '../lib/colors';
 
 const CARD_TYPES = ['UNIT', 'PILOT', 'COMMAND', 'BASE', 'RESOURCE'];
+const TEXT_FILTER_DEBOUNCE_MS = 350;
 
 function parseCsv(value: string | undefined): string[] {
   return (value ?? '')
@@ -30,6 +31,22 @@ export function Filters({
   const traits = useTraits();
   const rarities = useRarities();
 
+  // Local drafts so typing stays snappy; committed filters are debounced.
+  const [nameDraft, setNameDraft] = useState(filters.name ?? '');
+  const [effectDraft, setEffectDraft] = useState(filters.effect ?? '');
+  const filtersRef = useRef(filters);
+  const onChangeRef = useRef(onChange);
+  filtersRef.current = filters;
+  onChangeRef.current = onChange;
+
+  useEffect(() => {
+    setNameDraft(filters.name ?? '');
+  }, [filters.name]);
+
+  useEffect(() => {
+    setEffectDraft(filters.effect ?? '');
+  }, [filters.effect]);
+
   const set = (patch: Partial<CardFilters>) => {
     const next: CardFilters = { ...filters, offset: 0, ...patch };
     for (const key of Object.keys(patch) as (keyof CardFilters)[]) {
@@ -37,6 +54,26 @@ export function Filters({
     }
     onChange(next);
   };
+
+  useEffect(() => {
+    if (nameDraft === (filtersRef.current.name ?? '')) return;
+    const handle = window.setTimeout(() => {
+      const next: CardFilters = { ...filtersRef.current, offset: 0, name: nameDraft };
+      if (!nameDraft) delete next.name;
+      onChangeRef.current(next);
+    }, TEXT_FILTER_DEBOUNCE_MS);
+    return () => window.clearTimeout(handle);
+  }, [nameDraft]);
+
+  useEffect(() => {
+    if (effectDraft === (filtersRef.current.effect ?? '')) return;
+    const handle = window.setTimeout(() => {
+      const next: CardFilters = { ...filtersRef.current, offset: 0, effect: effectDraft };
+      if (!effectDraft) delete next.effect;
+      onChangeRef.current(next);
+    }, TEXT_FILTER_DEBOUNCE_MS);
+    return () => window.clearTimeout(handle);
+  }, [effectDraft]);
 
   const selectedTraits = parseCsv(filters.traits);
   const selectedColors = parseCsv(filters.color);
@@ -54,16 +91,16 @@ export function Filters({
         <input
           className="hud-input w-56"
           placeholder="nombre o GD05-001…"
-          value={filters.name ?? ''}
-          onChange={(e) => set({ name: e.target.value })}
+          value={nameDraft}
+          onChange={(e) => setNameDraft(e.target.value)}
         />
       </Field>
       <Field label="Efecto">
         <input
           className="hud-input w-44"
           placeholder="texto de efecto…"
-          value={filters.effect ?? ''}
-          onChange={(e) => set({ effect: e.target.value })}
+          value={effectDraft}
+          onChange={(e) => setEffectDraft(e.target.value)}
         />
       </Field>
       <Field label="Set">

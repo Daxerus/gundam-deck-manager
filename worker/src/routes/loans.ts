@@ -1,5 +1,5 @@
 import { Hono } from 'hono';
-import { and, eq, or } from 'drizzle-orm';
+import { and, eq, inArray, or } from 'drizzle-orm';
 import type { AppEnv } from '../auth';
 import { getDb } from '../db/client';
 import { cardRequests, returnRequests } from '../db/schema';
@@ -262,10 +262,11 @@ export const loansRoutes = new Hono<AppEnv>()
     const loanIds = openLoans.map((l) => l.id);
     if (loanIds.length === 0) return c.json({ data: [] });
 
-    const rows = await db.select().from(returnRequests).all();
-    const mine = rows.filter(
-      (r) => r.status === 'pending' && loanIds.includes(r.loanId),
-    );
+    const mine = await db
+      .select()
+      .from(returnRequests)
+      .where(and(eq(returnRequests.status, 'pending'), inArray(returnRequests.loanId, loanIds)))
+      .all();
     return c.json({
       data: mine.map((r) => ({
         id: r.id,

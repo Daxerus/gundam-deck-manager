@@ -42,7 +42,7 @@ export interface CatalogStatus {
 }
 
 export interface Paginated<T> {
-  _meta: { total: number; limit: number; offset: number; count: number };
+  _meta: { total: number; limit: number; offset: number; count: number; hasMore?: boolean };
   data: T[];
 }
 

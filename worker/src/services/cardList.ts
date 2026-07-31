@@ -4,47 +4,99 @@ import { cards, type CardRow } from '../db/schema';
 import type { StatusColor } from './cardStatus';
 
 /**
- * Collection visibility / status-colour predicate for one printing, expressed as
- * correlated subqueries. Materialising the product_id list instead would blow past
- * D1's 100 bound-parameter cap for any real-sized collection.
- * Mirrors the rules in services/cardStatus.ts.
+ * Subquery of product_ids visible in a user's collection (owned or lent out).
+ * Uses set-based SELECTs so D1 reads scale with the user's collection, not the catalog.
  */
-export function collectionCondition(
+function visibleProductIdSubquery(userId: number): SQL {
+  return sql`(
+    select product_id from collection_items
+    where user_id = ${userId} and quantity > 0
+    union
+    select li.product_id from loan_items li
+    inner join loans l on l.id = li.loan_id
+    where l.status = 'open' and l.lender_id = ${userId}
+  )`;
+}
+
+/**
+ * Subquery of product_ids matching ownership + optional status colour.
+ * Aggregates owned/alloc/lent/borrowed once via JOINs (not per catalog row).
+ * Mirrors the rules previously in collectionCondition / services/cardStatus.ts.
+ */
+function matchingProductIdSubquery(userId: number, statusColor: StatusColor | null): SQL {
+  if (!statusColor) return visibleProductIdSubquery(userId);
+
+  const statusPred =
+    statusColor === 'green'
+      ? sql`(coalesce(o.qty, 0) + coalesce(l.qty, 0)) > 0
+          and coalesce(l.qty, 0) = 0 and coalesce(b.qty, 0) = 0
+          and coalesce(a.qty, 0) = 0`
+      : statusColor === 'red'
+        ? sql`(coalesce(o.qty, 0) + coalesce(l.qty, 0)) > 0
+            and coalesce(l.qty, 0) = 0 and coalesce(b.qty, 0) = 0
+            and coalesce(o.qty, 0) > 0 and coalesce(a.qty, 0) >= coalesce(o.qty, 0)`
+        : sql`(coalesce(o.qty, 0) + coalesce(l.qty, 0)) > 0
+            and (
+              coalesce(l.qty, 0) > 0 or coalesce(b.qty, 0) > 0
+              or (coalesce(a.qty, 0) > 0 and coalesce(a.qty, 0) < coalesce(o.qty, 0))
+            )`;
+
+  return sql`(
+    select k.product_id
+    from (
+      select product_id from collection_items
+      where user_id = ${userId} and quantity > 0
+      union
+      select li.product_id from loan_items li
+      inner join loans l on l.id = li.loan_id
+      where l.status = 'open' and (l.lender_id = ${userId} or l.borrower_id = ${userId})
+    ) k
+    left join (
+      select product_id, quantity as qty from collection_items where user_id = ${userId}
+    ) o on o.product_id = k.product_id
+    left join (
+      select a.product_id, sum(a.quantity) as qty
+      from allocations a
+      inner join decks d on d.id = a.deck_id
+      where d.user_id = ${userId} and d.is_active = 1
+      group by a.product_id
+    ) a on a.product_id = k.product_id
+    left join (
+      select li.product_id, sum(li.quantity) as qty
+      from loan_items li
+      inner join loans l on l.id = li.loan_id
+      where l.status = 'open' and l.lender_id = ${userId}
+      group by li.product_id
+    ) l on l.product_id = k.product_id
+    left join (
+      select li.product_id, sum(li.quantity) as qty
+      from loan_items li
+      inner join loans l on l.id = li.loan_id
+      where l.status = 'open' and l.borrower_id = ${userId}
+      group by li.product_id
+    ) b on b.product_id = k.product_id
+    where ${statusPred}
+  )`;
+}
+
+/**
+ * Ownership / status-colour filter as a set membership predicate.
+ * Prefer this over correlated per-row subqueries against the full catalog.
+ */
+export function collectionOwnershipFilter(
   userId: number,
   statusColor: StatusColor | null,
-  productId: SQL,
+  opts: { groupVariants: boolean },
 ): SQL {
-  const owned = sql`coalesce((
-    select ci.quantity from collection_items ci
-    where ci.user_id = ${userId} and ci.product_id = ${productId}
-  ), 0)`;
-  const alloc = sql`coalesce((
-    select sum(a.quantity) from allocations a
-    inner join decks d on d.id = a.deck_id
-    where d.user_id = ${userId} and d.is_active = 1 and a.product_id = ${productId}
-  ), 0)`;
-  const lent = sql`coalesce((
-    select sum(li.quantity) from loan_items li
-    inner join loans l on l.id = li.loan_id
-    where l.status = 'open' and l.lender_id = ${userId} and li.product_id = ${productId}
-  ), 0)`;
-  const borrowed = sql`coalesce((
-    select sum(li.quantity) from loan_items li
-    inner join loans l on l.id = li.loan_id
-    where l.status = 'open' and l.borrower_id = ${userId} and li.product_id = ${productId}
-  ), 0)`;
-
-  const visible = sql`(${owned} + ${lent}) > 0`;
-  if (!statusColor) return visible;
-
-  const hasLoans = sql`(${lent} > 0 or ${borrowed} > 0)`;
-  if (statusColor === 'green') {
-    return sql`${visible} and not ${hasLoans} and ${alloc} = 0`;
+  const matched = matchingProductIdSubquery(userId, statusColor);
+  if (opts.groupVariants) {
+    // Include the card identity if ANY of its printings matches.
+    return sql`${cards.cardNumber} in (
+      select c.card_number from cards c
+      where c.product_id in ${matched}
+    )`;
   }
-  if (statusColor === 'red') {
-    return sql`${visible} and not ${hasLoans} and ${owned} > 0 and ${alloc} >= ${owned}`;
-  }
-  return sql`${visible} and (${hasLoans} or (${alloc} > 0 and ${alloc} < ${owned}))`;
+  return sql`${cards.productId} in ${matched}`;
 }
 
 /**
@@ -110,7 +162,7 @@ export function serializeCard(row: CardRow) {
 export type CardListQuery = Record<string, string | undefined>;
 
 export interface CardListResult {
-  _meta: { total: number; limit: number; offset: number; count: number };
+  _meta: { total: number; limit: number; offset: number; count: number; hasMore: boolean };
   data: (ReturnType<typeof serializeCard> & { variants?: ReturnType<typeof serializeCard>[] })[];
 }
 
@@ -222,19 +274,7 @@ export async function listCards(
     if (userId == null) {
       throw new Error('collectionUserId required when filtering by ownership');
     }
-    if (groupVariants) {
-      // Include the card identity if ANY of its printings matches.
-      conds.push(
-        sql`exists (
-          select 1
-          from cards owned_card
-          where owned_card.card_number = ${cards.cardNumber}
-            and ${collectionCondition(userId, statusColor, sql`owned_card.product_id`)}
-        )`,
-      );
-    } else {
-      conds.push(collectionCondition(userId, statusColor, sql`${cards.productId}`));
-    }
+    conds.push(collectionOwnershipFilter(userId, statusColor, { groupVariants }));
   }
   for (const [key, col] of [
     ['level', cards.level],
@@ -252,17 +292,27 @@ export async function listCards(
   const limit = clamp(Number(q.limit) || 60, 1, 250);
   const offset = Math.max(0, Number(q.offset) || 0);
 
-  const totalRow = await db.select({ n: count() }).from(cards).where(where).get();
-  const total = totalRow?.n ?? 0;
-
-  const rows = await db
+  // Fetch one extra row so hasMore does not require a COUNT on every page.
+  const fetched = await db
     .select()
     .from(cards)
     .where(where)
     .orderBy(asc(cards.setCode), asc(cards.cardNumber), asc(cards.productId))
-    .limit(limit)
+    .limit(limit + 1)
     .offset(offset)
     .all();
+
+  const hasMore = fetched.length > limit;
+  const rows = hasMore ? fetched.slice(0, limit) : fetched;
+
+  let total: number;
+  if (offset === 0) {
+    const totalRow = await db.select({ n: count() }).from(cards).where(where).get();
+    total = totalRow?.n ?? 0;
+  } else {
+    // UI reads total from page 0; later pages only need hasMore for pagination.
+    total = offset + rows.length + (hasMore ? 1 : 0);
+  }
 
   const variantsByNumber = new Map<string, CardRow[]>();
   if (groupVariants && rows.length > 0) {
@@ -281,7 +331,7 @@ export async function listCards(
   }
 
   return {
-    _meta: { total, limit, offset, count: rows.length },
+    _meta: { total, limit, offset, count: rows.length, hasMore },
     data: rows.map((row) => ({
       ...serializeCard(row),
       ...(groupVariants

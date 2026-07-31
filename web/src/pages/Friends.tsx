@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useQueryClient } from '@tanstack/react-query';
 import { Panel } from '../components/hud';
@@ -27,18 +27,25 @@ import { ApiError } from '../lib/api';
 import type { Card, CardStatusBreakdown } from '../lib/types';
 
 const PAGE = 60;
+const SEARCH_DEBOUNCE_MS = 350;
 
 export function Friends() {
   const [search, setSearch] = useState('');
+  const [debouncedSearch, setDebouncedSearch] = useState('');
   const [viewFriendId, setViewFriendId] = useState<number | null>(null);
   const [msg, setMsg] = useState<string | null>(null);
   const [newNick, setNewNick] = useState('');
+
+  useEffect(() => {
+    const handle = window.setTimeout(() => setDebouncedSearch(search.trim()), SEARCH_DEBOUNCE_MS);
+    return () => window.clearTimeout(handle);
+  }, [search]);
 
   const friends = useFriends();
   const contacts = useLoanContacts();
   const createContact = useCreateLoanContact();
   const deleteContact = useDeleteLoanContact();
-  const searchResults = useSearchUsers(search);
+  const searchResults = useSearchUsers(debouncedSearch);
   const requestFriend = useRequestFriend();
   const acceptFriend = useAcceptFriend();
   const removeFriend = useRemoveFriend();
@@ -79,12 +86,16 @@ export function Friends() {
         {msg && <p className="mt-2 font-mono text-[12px] text-hud">{msg}</p>}
       </Panel>
 
-      {search.trim() && (
+      {debouncedSearch && (
         <Panel title="Resultados">
-          {searchResults.isLoading && <p className="font-mono text-sm text-muted">Buscando…</p>}
-          {(searchResults.data ?? []).length === 0 && !searchResults.isLoading && (
-            <p className="font-mono text-sm text-muted">Sin resultados.</p>
+          {(searchResults.isLoading || search !== debouncedSearch) && (
+            <p className="font-mono text-sm text-muted">Buscando…</p>
           )}
+          {(searchResults.data ?? []).length === 0 &&
+            !searchResults.isLoading &&
+            search === debouncedSearch && (
+              <p className="font-mono text-sm text-muted">Sin resultados.</p>
+            )}
           <ul className="divide-y divide-line/60">
             {(searchResults.data ?? []).map((u) => (
               <li key={u.id} className="flex items-center justify-between gap-3 py-2">

@@ -98,28 +98,36 @@ export const decksRoutes = new Hono<AppEnv>()
       ownedByCardNumber,
     );
 
-    const resolvedCards = await Promise.all(
-      dcRows.map(async (d) => {
-        const printings = printingsByCardNumber[d.cardNumber] ?? [d.cardNumber];
-        const allocatedByPrinting = printings
-          .filter((productId) => (allocMap[productId] ?? 0) > 0)
-          .map((productId) => ({ productId, qty: allocMap[productId] ?? 0 }));
-        const representativeProductId = printings[0] ?? d.cardNumber;
-        const cardRow = await db
-          .select()
-          .from(cards)
-          .where(eq(cards.productId, representativeProductId))
-          .get();
-        return {
-          cardNumber: d.cardNumber,
-          quantity: d.quantity,
-          owned: ownedByCardNumber.get(d.cardNumber) ?? 0,
-          allocated: sumAllocatedForCardNumber(d.cardNumber, printings, allocMap),
-          allocatedByPrinting,
-          card: cardRow ? serializeCard(cardRow) : null,
-        };
-      }),
-    );
+    const representativeIds = [
+      ...new Set(
+        dcRows.map((d) => {
+          const printings = printingsByCardNumber[d.cardNumber] ?? [d.cardNumber];
+          return printings[0] ?? d.cardNumber;
+        }),
+      ),
+    ];
+    const cardRows =
+      representativeIds.length === 0
+        ? []
+        : await db.select().from(cards).where(inArray(cards.productId, representativeIds)).all();
+    const cardByProductId = new Map(cardRows.map((row) => [row.productId, row] as const));
+
+    const resolvedCards = dcRows.map((d) => {
+      const printings = printingsByCardNumber[d.cardNumber] ?? [d.cardNumber];
+      const allocatedByPrinting = printings
+        .filter((productId) => (allocMap[productId] ?? 0) > 0)
+        .map((productId) => ({ productId, qty: allocMap[productId] ?? 0 }));
+      const representativeProductId = printings[0] ?? d.cardNumber;
+      const cardRow = cardByProductId.get(representativeProductId);
+      return {
+        cardNumber: d.cardNumber,
+        quantity: d.quantity,
+        owned: ownedByCardNumber.get(d.cardNumber) ?? 0,
+        allocated: sumAllocatedForCardNumber(d.cardNumber, printings, allocMap),
+        allocatedByPrinting,
+        card: cardRow ? serializeCard(cardRow) : null,
+      };
+    });
     resolvedCards.sort((a, b) => cardSortKey(a.card).localeCompare(cardSortKey(b.card)));
 
     return c.json({
