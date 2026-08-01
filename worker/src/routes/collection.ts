@@ -1,9 +1,10 @@
 import { Hono } from 'hono';
-import { and, asc, eq } from 'drizzle-orm';
+import { and, eq } from 'drizzle-orm';
 import type { AppEnv } from '../auth';
 import { getDb } from '../db/client';
 import { cards, collectionItems } from '../db/schema';
 import { serializeCard } from './cards';
+import { cardNumberOrderBy } from '../services/cardList';
 import { readJson } from '../util/json';
 import { getCollectionStatus } from '../services/loans';
 
@@ -62,7 +63,7 @@ export const collectionRoutes = new Hono<AppEnv>()
       .from(collectionItems)
       .innerJoin(cards, eq(cards.productId, collectionItems.productId))
       .where(eq(collectionItems.userId, userId))
-      .orderBy(asc(cards.setCode), asc(cards.cardNumber))
+      .orderBy(...cardNumberOrderBy())
       .all();
     return c.json({ data: rows.map((r) => ({ ...serializeCard(r.card), quantity: r.quantity })) });
   })

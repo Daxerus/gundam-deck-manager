@@ -112,6 +112,24 @@ function setCondition(setCode: string): SQL {
   return or(eq(sql`lower(${cards.setCode})`, set), eq(numberPrefix, set))!;
 }
 
+/**
+ * Catalog display order: driven by `card_number`, never by `set_code`. A reprint keeps
+ * its original number but carries the reprinting product's set code (GD01-065 shipped
+ * again inside a later Deck Build Box), so ordering by set first tears holes in a set's
+ * numbering. The numeric part is cast to an integer so unpadded numbers stay in place.
+ */
+export function cardNumberOrderBy(): SQL[] {
+  const dash = sql`instr(${cards.cardNumber}, '-')`;
+  const prefix = sql`case when ${dash} > 0
+    then lower(substr(${cards.cardNumber}, 1, ${dash} - 1))
+    else lower(${cards.cardNumber}) end`;
+  const numeric = sql`case when ${dash} > 0
+    then cast(substr(${cards.cardNumber}, ${dash} + 1) as integer)
+    else 0 end`;
+  // Trailing cardNumber tie-break keeps suffixed numbers (e.g. GD01-001a) deterministic.
+  return [asc(prefix), asc(numeric), asc(cards.cardNumber), asc(cards.productId)];
+}
+
 function clamp(n: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, n));
 }
@@ -297,7 +315,7 @@ export async function listCards(
     .select()
     .from(cards)
     .where(where)
-    .orderBy(asc(cards.setCode), asc(cards.cardNumber), asc(cards.productId))
+    .orderBy(...cardNumberOrderBy())
     .limit(limit + 1)
     .offset(offset)
     .all();
