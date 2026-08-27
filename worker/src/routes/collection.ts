@@ -1,5 +1,5 @@
 import { Hono } from 'hono';
-import { and, eq } from 'drizzle-orm';
+import { and, eq, inArray } from 'drizzle-orm';
 import type { AppEnv } from '../auth';
 import { getDb } from '../db/client';
 import { cards, collectionItems } from '../db/schema';
@@ -68,6 +68,57 @@ export const collectionRoutes = new Hono<AppEnv>()
     return c.json({ data: rows.map((r) => ({ ...serializeCard(r.card), quantity: r.quantity })) });
   })
 
+  // PUT /api/collection/bulk — apply a batch of owned quantities (0 removes)
+  .put('/bulk', async (c) => {
+    const db = getDb(c.env);
+    const userId = c.get('userId')!;
+    const body = await readJson<{ items: { productId: string; quantity: number }[] }>(c);
+    if (!Array.isArray(body.items)) return c.json({ error: 'items array required' }, 400);
+    if (body.items.length > MAX_BULK_ITEMS) {
+      return c.json({ error: `Too many items (max ${MAX_BULK_ITEMS})` }, 400);
+    }
+
+    // Quantities are absolute, not deltas, so a repeated product keeps its last value.
+    const qtyByProduct = new Map<string, number>();
+    for (const item of body.items) {
+      const productId = (item.productId ?? '').trim();
+      if (!productId) continue;
+      qtyByProduct.set(productId, clampInt(item.quantity ?? 0, 0, MAX_QUANTITY));
+    }
+    if (qtyByProduct.size === 0) return c.json({ ok: true, items: [] });
+
+    const entries = [...qtyByProduct.entries()];
+    const removals = entries.filter(([, quantity]) => quantity <= 0).map(([productId]) => productId);
+    const upserts = entries.filter(([, quantity]) => quantity > 0);
+
+    const stmts = [
+      ...chunk(removals, BATCH_CHUNK).map((productIds) =>
+        db
+          .delete(collectionItems)
+          .where(
+            and(eq(collectionItems.userId, userId), inArray(collectionItems.productId, productIds)),
+          ),
+      ),
+      ...upserts.map(([productId, quantity]) =>
+        db
+          .insert(collectionItems)
+          .values({ userId, productId, quantity })
+          .onConflictDoUpdate({
+            target: [collectionItems.userId, collectionItems.productId],
+            set: { quantity },
+          }),
+      ),
+    ];
+    for (const group of chunk(stmts, BATCH_CHUNK)) {
+      await db.batch(group as [(typeof stmts)[number], ...typeof stmts]);
+    }
+
+    return c.json({
+      ok: true,
+      items: entries.map(([productId, quantity]) => ({ productId, quantity })),
+    });
+  })
+
   // PUT /api/collection/:productId — set owned quantity (0 removes it)
   .put('/:productId', async (c) => {
     const db = getDb(c.env);
@@ -91,3 +142,18 @@ export const collectionRoutes = new Hono<AppEnv>()
       });
     return c.json({ productId, quantity });
   });
+
+const MAX_BULK_ITEMS = 500;
+const MAX_QUANTITY = 9999;
+/** Keep each D1 batch (and each IN (...) list) well below the bound-parameter limit. */
+const BATCH_CHUNK = 50;
+
+function clampInt(n: number, min: number, max: number): number {
+  return Math.min(max, Math.max(min, Math.floor(Number(n) || 0)));
+}
+
+function chunk<T>(items: T[], size: number): T[][] {
+  const out: T[][] = [];
+  for (let i = 0; i < items.length; i += size) out.push(items.slice(i, i + size));
+  return out;
+}

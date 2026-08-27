@@ -13,6 +13,69 @@ function mergedStatusColor(opts: {
   return 'green';
 }
 
+function totalQty(rows: { qty: number }[]): number {
+  return rows.reduce((total, row) => total + row.qty, 0);
+}
+
+/**
+ * Re-derive a breakdown for an owned quantity that only exists in the local draft, so the
+ * tile shows the edited amount before the bulk save lands. Mirrors the worker's
+ * buildCardStatusBreakdown: loans stay untouched and deck rows shrink to the own copies left.
+ */
+export function withDraftOwned(
+  status: CardStatusBreakdown | undefined,
+  productId: string,
+  draftOwned: number,
+): CardStatusBreakdown | undefined {
+  const owned = Math.max(0, draftOwned);
+  if (!status) {
+    if (owned <= 0) return undefined;
+    return {
+      productId,
+      owned,
+      box: owned,
+      decks: [],
+      lentOut: [],
+      borrowedIn: [],
+      statusColor: 'green',
+      displayQty: owned,
+      ownTotal: owned,
+    };
+  }
+
+  const lentOutTotal = totalQty(status.lentOut);
+  const borrowedInTotal = totalQty(status.borrowedIn);
+  const ownTotal = Math.max(0, owned - borrowedInTotal);
+  const allocTotal = totalQty(status.decks);
+  const ownInDecks = Math.min(allocTotal, ownTotal);
+
+  let decks = status.decks;
+  if (ownInDecks < allocTotal) {
+    decks = [];
+    let remaining = ownInDecks;
+    for (const deck of status.decks) {
+      if (remaining <= 0 || deck.qty <= 0) continue;
+      const take = Math.min(deck.qty, remaining);
+      decks.push({ ...deck, qty: take });
+      remaining -= take;
+    }
+  }
+
+  return {
+    ...status,
+    owned,
+    box: ownTotal - ownInDecks,
+    decks,
+    statusColor: mergedStatusColor({
+      ownTotal: ownTotal + lentOutTotal,
+      ownInDecks,
+      hasLoans: lentOutTotal > 0 || borrowedInTotal > 0,
+    }),
+    displayQty: owned + lentOutTotal,
+    ownTotal: ownTotal + lentOutTotal,
+  };
+}
+
 function partyKey(row: LoanPartyQty): string {
   if (row.contactId != null) return `c:${row.contactId}`;
   if (row.userId != null) return `u:${row.userId}`;

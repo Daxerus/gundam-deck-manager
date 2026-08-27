@@ -7,13 +7,11 @@ import { LendCardDialog } from '../components/LendCardDialog';
 import { ReturnLoanDialog } from '../components/ReturnLoanDialog';
 import { ScrollToTopButton } from '../components/ScrollToTopButton';
 import {
-  useCollection,
-  useCollectionStatus,
-  useInfiniteCards,
-  useSets,
-  useSetCollection,
-  type CardFilters,
-} from '../lib/queries';
+  CollectionSaveControls,
+  CollectionSaveFab,
+} from '../components/CollectionSaveControls';
+import { useInfiniteCards, useSets, type CardFilters } from '../lib/queries';
+import { useCollectionDraft } from '../lib/useCollectionDraft';
 import { useLoadMoreOnScroll } from '../lib/useLoadMoreOnScroll';
 import type { Card } from '../lib/types';
 
@@ -36,15 +34,10 @@ export function Collection() {
 
   const sets = useSets();
   const cards = useInfiniteCards(filters, PAGE);
-  const collection = useCollection();
-  const statusMap = useCollectionStatus();
-  const setColl = useSetCollection();
+  const draft = useCollectionDraft();
 
   const total = cards.data?.pages[0]?._meta.total ?? 0;
   const items = cards.data?.pages.flatMap((page) => page.data) ?? [];
-  const owned = (pid: string) => collection.data?.[pid] ?? 0;
-  const status = (pid: string) => statusMap.data?.[pid];
-  const totalCopies = Object.values(statusMap.data ?? {}).reduce((s, st) => s + st.displayQty, 0);
 
   const loadMoreRef = useLoadMoreOnScroll({
     hasNextPage: !!cards.hasNextPage,
@@ -57,11 +50,17 @@ export function Collection() {
     setFilters({ ...rest, owned_only: '1' });
   };
 
+  // Loans move real copies, so the draft has to land before the dialog acts on them.
+  const openAfterSave = async (open: () => void) => {
+    await draft.flushNow();
+    open();
+  };
+
   return (
     <div className="space-y-4">
       <Panel
         title="My Collection // Box"
-        subtitle={`${total} cartas distintas · ${totalCopies} copias`}
+        subtitle={`${total} cartas distintas · ${draft.totalDisplayCopies} copias`}
         className="z-20"
       >
         <Filters
@@ -70,6 +69,7 @@ export function Collection() {
           sets={sets.data ?? []}
           showStatusColor
         />
+        <CollectionSaveControls draft={draft} className="mt-3" />
         {toast && <p className="mt-2 font-mono text-[12px] text-hud">{toast}</p>}
       </Panel>
 
@@ -88,14 +88,14 @@ export function Collection() {
           <CardTile
             key={card.productId}
             card={card}
-            owned={owned(card.productId)}
-            status={status(card.productId)}
-            onChangeOwned={(qty) => setColl.mutate({ productId: card.productId, quantity: qty })}
+            owned={draft.ownedOf(card.productId)}
+            status={draft.statusOf(card.productId)}
+            onChangeOwned={(qty) => draft.setOwned(card.productId, qty)}
             onClick={() => setDetail(card)}
             onReturnLoan={(loanId, productId, maxQty, username) =>
-              setReturnDlg({ loanId, productId, maxQty, username })
+              void openAfterSave(() => setReturnDlg({ loanId, productId, maxQty, username }))
             }
-            onLend={(maxQty) => setLendDlg({ card, maxQty })}
+            onLend={(maxQty) => void openAfterSave(() => setLendDlg({ card, maxQty }))}
           />
         ))}
         <div ref={loadMoreRef} className="col-span-full h-1" />
@@ -124,6 +124,7 @@ export function Collection() {
           }}
         />
       )}
+      <CollectionSaveFab draft={draft} />
       <ScrollToTopButton />
     </div>
   );

@@ -167,13 +167,15 @@ export function useCollectionStatus() {
   });
 }
 
-export function useSetCollection() {
+/** Persist a batch of owned quantities in one request (client-side draft save). */
+export function useSaveCollection() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: ({ productId, quantity }: { productId: string; quantity: number }) =>
-      api.put<{ productId: string; quantity: number }>(`/collection/${encodeURIComponent(productId)}`, {
-        quantity,
-      }),
+    mutationFn: (items: { productId: string; quantity: number }[]) =>
+      api.put<{ ok: boolean; items: { productId: string; quantity: number }[] }>(
+        '/collection/bulk',
+        { items },
+      ),
     onSuccess: () => {
       invalidateCollectionMaps(qc);
     },

@@ -5,21 +5,23 @@ import { CardTile } from '../components/CardTile';
 import { CardDetailModal } from '../components/CardDetailModal';
 import { useAuth } from '../lib/auth';
 import {
-  useCollection,
-  useCollectionStatus,
   useInfiniteCards,
   useSets,
-  useSetCollection,
   useStatus,
   useSyncCatalog,
   type CardFilters,
 } from '../lib/queries';
+import { useCollectionDraft } from '../lib/useCollectionDraft';
 import { useLoadMoreOnScroll } from '../lib/useLoadMoreOnScroll';
 import { ApiError } from '../lib/api';
 import type { Card, CardStatusBreakdown } from '../lib/types';
 import { ReturnLoanDialog } from '../components/ReturnLoanDialog';
 import { ReceiveCardDialog } from '../components/ReceiveCardDialog';
 import { ScrollToTopButton } from '../components/ScrollToTopButton';
+import {
+  CollectionSaveControls,
+  CollectionSaveFab,
+} from '../components/CollectionSaveControls';
 
 const PAGE = 60;
 
@@ -43,15 +45,11 @@ export function Catalog() {
   const status = useStatus();
   const sets = useSets();
   const cards = useInfiniteCards(filters, PAGE);
-  const collection = useCollection();
-  const statusMap = useCollectionStatus();
-  const setColl = useSetCollection();
+  const draft = useCollectionDraft();
   const sync = useSyncCatalog();
 
   const total = cards.data?.pages[0]?._meta.total ?? 0;
   const items = cards.data?.pages.flatMap((page) => page.data) ?? [];
-  const owned = (pid: string) => collection.data?.[pid] ?? 0;
-  const cardStatus = (pid: string) => statusMap.data?.[pid];
   const catalogCardCount = status.data?.cardCount ?? null;
   const emptyCatalog =
     !status.isLoading && catalogCardCount !== null && catalogCardCount === 0;
@@ -67,6 +65,12 @@ export function Catalog() {
   const updateFilters = (next: CardFilters) => {
     const { offset: _offset, ...rest } = next;
     setFilters({ ...rest, group_variants: '1' });
+  };
+
+  // Loans move real copies, so the draft has to land before the dialog acts on them.
+  const openAfterSave = async (open: () => void) => {
+    await draft.flushNow();
+    open();
   };
 
   async function runSync() {
@@ -86,6 +90,7 @@ export function Catalog() {
         className="z-20"
       >
         <Filters filters={filters} onChange={updateFilters} sets={sets.data ?? []} />
+        <CollectionSaveControls draft={draft} className="mt-3" />
         {toast && <p className="mt-2 font-mono text-[12px] text-hud">{toast}</p>}
       </Panel>
 
@@ -124,14 +129,14 @@ export function Catalog() {
           <CatalogCardTile
             key={card.cardNumber}
             card={card}
-            owned={owned}
-            cardStatus={cardStatus}
-            onChangeOwned={(productId, quantity) => setColl.mutate({ productId, quantity })}
+            owned={draft.ownedOf}
+            cardStatus={draft.statusOf}
+            onChangeOwned={draft.setOwned}
             onOpenDetail={setDetail}
             onReturnLoan={(loanId, productId, maxQty, username) =>
-              setReturnDlg({ loanId, productId, maxQty, username })
+              void openAfterSave(() => setReturnDlg({ loanId, productId, maxQty, username }))
             }
-            onReceive={(selected) => setReceiveDlg(selected)}
+            onReceive={(selected) => void openAfterSave(() => setReceiveDlg(selected))}
           />
         ))}
         <div ref={loadMoreRef} className="col-span-full h-1" />
@@ -155,6 +160,7 @@ export function Catalog() {
           }}
         />
       )}
+      <CollectionSaveFab draft={draft} />
       <ScrollToTopButton />
     </div>
   );
