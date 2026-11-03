@@ -16,7 +16,7 @@ import {
 import { useLoadMoreOnScroll } from '../lib/useLoadMoreOnScroll';
 import { MAIN_DECK_SIZE, RESOURCE_DECK_SIZE, validateDeckDraft } from '../lib/rules';
 import { colorClasses } from '../lib/colors';
-import { parseDeckText, formatDeckText } from '../lib/deckImport';
+import { parseDeckText, formatDeckText, IMPORT_LIST_EXAMPLE } from '../lib/deckImport';
 import { api } from '../lib/api';
 import type { Card, DeckCardEntry, DeckValidation } from '../lib/types';
 
@@ -754,12 +754,15 @@ function ImportDeckDialog({
       <div className="w-full max-w-2xl" onClick={(e) => e.stopPropagation()}>
         <Panel title="Importar deck" subtitle="Texto plano · líneas // son comentarios">
           <p className="mb-3 font-ui text-sm text-muted">
-            Pega una lista tipo <span className="font-mono text-ink">2x ST01-009</span>. Sustituye el
-            contenido actual del draft (aún sin guardar).
+            Pega una lista. El nombre se ignora; solo cuentan la cantidad y el código (
+            <span className="font-mono text-ink">4 GD01-024</span>,{' '}
+            <span className="font-mono text-ink">4x GD01-024</span>,{' '}
+            <span className="font-mono text-ink">4 - Launcher Strike Gundam - GD01-024</span>
+            ). Un código solo vale 1 copia. Sustituye el draft actual (aún sin guardar).
           </p>
           <textarea
             className="hud-input min-h-56 w-full resize-y font-mono text-[12px] leading-relaxed"
-            placeholder={`// Main Deck\n2x ST01-009\n3x GD01-118\n4x GD01-086`}
+            placeholder={IMPORT_LIST_EXAMPLE}
             value={text}
             onChange={(e) => setText(e.target.value)}
             spellCheck={false}

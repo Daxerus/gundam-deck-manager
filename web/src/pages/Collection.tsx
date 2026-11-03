@@ -1,5 +1,6 @@
 import { useState } from 'react';
-import { Panel } from '../components/hud';
+import { Panel, HudButton } from '../components/hud';
+import { ImportCollectionDialog } from '../components/ImportCollectionDialog';
 import { Filters } from '../components/Filters';
 import { CardTile } from '../components/CardTile';
 import { CardDetailModal } from '../components/CardDetailModal';
@@ -31,6 +32,7 @@ export function Collection() {
     username: string;
   } | null>(null);
   const [lendDlg, setLendDlg] = useState<{ card: Card; maxQty: number } | null>(null);
+  const [importOpen, setImportOpen] = useState(false);
 
   const sets = useSets();
   const cards = useInfiniteCards(filters, PAGE);
@@ -63,6 +65,11 @@ export function Collection() {
         subtitle={`${total} cartas distintas · ${draft.totalDisplayCopies} copias`}
         className="z-20"
       >
+        <div className="mb-3">
+          <HudButton variant="ghost" onClick={() => setImportOpen(true)}>
+            Importar colección externa
+          </HudButton>
+        </div>
         <Filters
           filters={filters}
           onChange={updateFilters}
@@ -107,6 +114,13 @@ export function Collection() {
         </p>
       )}
 
+      {importOpen && (
+        <ImportCollectionDialog
+          draft={draft}
+          onClose={() => setImportOpen(false)}
+          onDone={(message) => setToast(message)}
+        />
+      )}
       {detail && <CardDetailModal card={detail} onClose={() => setDetail(null)} />}
       {returnDlg && (
         <ReturnLoanDialog

@@ -13,6 +13,11 @@ export interface CollectionDraft {
   /** Server breakdown re-derived against the local draft. */
   statusOf: (productId: string) => CardStatusBreakdown | undefined;
   setOwned: (productId: string, quantity: number) => void;
+  /**
+   * Write absolute owned quantities and persist them. Resolves false when the save fails.
+   * Used by the external-collection import, which has to land before the owned list refetches.
+   */
+  applyOwned: (entries: { productId: string; quantity: number }[]) => Promise<boolean>;
   /** Printings edited but not saved yet. */
   pendingCount: number;
   /** Copies shown across the collection, draft included. */
@@ -24,7 +29,7 @@ export interface CollectionDraft {
    * Persist the draft and resolve when the collection is in sync. Await it before any
    * action that reads owned copies server-side (loans), so both sides agree.
    */
-  flushNow: () => Promise<void>;
+  flushNow: () => Promise<boolean>;
   discard: () => void;
 }
 
@@ -48,17 +53,17 @@ export function useCollectionDraft(): CollectionDraft {
   serverOwnedRef.current = collection.data;
   const saveRef = useRef(saveCollection.mutateAsync);
   saveRef.current = saveCollection.mutateAsync;
-  const inflightRef = useRef<Promise<void> | null>(null);
+  const inflightRef = useRef<Promise<boolean> | null>(null);
 
-  const flush = useCallback(async (): Promise<void> => {
+  const flush = useCallback(async (): Promise<boolean> => {
     // Chain onto any in-flight request so awaiting callers get a fully persisted collection.
     if (inflightRef.current) await inflightRef.current;
 
     const snapshot = pendingRef.current;
-    if (snapshot.size === 0) return;
+    if (snapshot.size === 0) return true;
 
-    const run: Promise<void> = saveRef
-      .current([...snapshot].map(([productId, quantity]) => ({ productId, quantity })))
+    const entries = [...snapshot].map(([productId, quantity]) => ({ productId, quantity }));
+    const run: Promise<boolean> = saveInChunks(entries, (part) => saveRef.current(part))
       .then(() => {
         // Seed the cache so quantities don't flicker back while the refetch is in flight.
         applySavedToCache(qc, snapshot);
@@ -68,19 +73,22 @@ export function useCollectionDraft(): CollectionDraft {
           for (const [productId, quantity] of snapshot) {
             if (next.get(productId) === quantity) next.delete(productId);
           }
+          pendingRef.current = next;
           return next;
         });
         setError(null);
+        return true;
       })
       .catch((err: unknown) => {
         setError(err instanceof ApiError ? err.message : 'No se pudieron guardar los cambios');
+        return false;
       })
       .finally(() => {
         if (inflightRef.current === run) inflightRef.current = null;
       });
 
     inflightRef.current = run;
-    await run;
+    return run;
   }, [qc]);
 
   const hasPending = pending.size > 0;
@@ -110,9 +118,32 @@ export function useCollectionDraft(): CollectionDraft {
       const draft = new Map(current);
       if (next === (serverOwnedRef.current?.[productId] ?? 0)) draft.delete(productId);
       else draft.set(productId, next);
+      pendingRef.current = draft;
       return draft;
     });
   }, []);
+
+  const applyOwned = useCallback(
+    async (entries: { productId: string; quantity: number }[]) => {
+      if (!serverOwnedRef.current) {
+        setError('La colección aún se está cargando');
+        return false;
+      }
+      if (inflightRef.current) await inflightRef.current;
+
+      const server = serverOwnedRef.current;
+      const draft = new Map(pendingRef.current);
+      for (const { productId, quantity } of entries) {
+        const next = Math.max(0, Math.floor(quantity));
+        if (next === (server[productId] ?? 0)) draft.delete(productId);
+        else draft.set(productId, next);
+      }
+      pendingRef.current = draft;
+      setPending(draft);
+      return flush();
+    },
+    [flush],
+  );
 
   const ownedOf = useCallback(
     (productId: string) => pending.get(productId) ?? collection.data?.[productId] ?? 0,
@@ -154,6 +185,7 @@ export function useCollectionDraft(): CollectionDraft {
     ownedOf,
     statusOf,
     setOwned,
+    applyOwned,
     pendingCount: pending.size,
     totalDisplayCopies,
     isSaving: saveCollection.isPending,
@@ -162,6 +194,18 @@ export function useCollectionDraft(): CollectionDraft {
     flushNow: flush,
     discard,
   };
+}
+
+/** Worker rejects a bulk write above 500 rows. */
+const BULK_CHUNK = 400;
+
+async function saveInChunks(
+  entries: { productId: string; quantity: number }[],
+  save: (part: { productId: string; quantity: number }[]) => Promise<unknown>,
+) {
+  for (let i = 0; i < entries.length; i += BULK_CHUNK) {
+    await save(entries.slice(i, i + BULK_CHUNK));
+  }
 }
 
 function applySavedToCache(qc: QueryClient, saved: Map<string, number>) {
