@@ -18,12 +18,15 @@ import { MAIN_DECK_SIZE, RESOURCE_DECK_SIZE, validateDeckDraft } from '../lib/ru
 import { colorClasses } from '../lib/colors';
 import { parseDeckText, formatDeckText, IMPORT_LIST_EXAMPLE } from '../lib/deckImport';
 import { api } from '../lib/api';
+import { useAuth } from '../lib/auth';
 import type { Card, DeckCardEntry, DeckValidation } from '../lib/types';
+import { DeckImageDialog } from '../components/DeckImageDialog';
 
 export function DeckEditor() {
   const { id } = useParams();
   const deckId = Number(id);
   const navigate = useNavigate();
+  const { user } = useAuth();
 
   const deck = useDeck(deckId);
   const ownedByCard = useOwnedByCardNumber();
@@ -38,6 +41,7 @@ export function DeckEditor() {
   const [dirty, setDirty] = useState(false);
   const [importOpen, setImportOpen] = useState(false);
   const [exportOpen, setExportOpen] = useState(false);
+  const [imageOpen, setImageOpen] = useState(false);
   const syncedAt = useRef<number | null>(null);
 
   useEffect(() => {
@@ -222,6 +226,9 @@ export function DeckEditor() {
             <HudButton variant="ghost" onClick={() => setExportOpen(true)}>
               Exportar
             </HudButton>
+            <HudButton variant="ghost" onClick={() => setImageOpen(true)}>
+              Imagen
+            </HudButton>
             <HudButton variant="ghost" onClick={discard} disabled={!dirty || saveCards.isPending}>
               Descartar
             </HudButton>
@@ -254,6 +261,23 @@ export function DeckEditor() {
           title={name || d.name}
           cards={draftEntries.map((e) => ({ cardNumber: e.cardNumber, quantity: e.quantity }))}
           onClose={() => setExportOpen(false)}
+        />
+      )}
+      {imageOpen && (
+        <DeckImageDialog
+          title={name || d.name}
+          creator={user?.username ?? ''}
+          cards={draftEntries.map((entry) => ({
+            cardNumber: entry.cardNumber,
+            name: entry.card?.name ?? entry.cardNumber,
+            quantity: entry.quantity,
+            cardType: entry.card?.cardType ?? null,
+            color: entry.card?.color ?? null,
+            level: entry.card?.level ?? null,
+            cost: entry.card?.cost ?? null,
+            imageUrl: entry.card?.imageUrl ?? null,
+          }))}
+          onClose={() => setImageOpen(false)}
         />
       )}
 
