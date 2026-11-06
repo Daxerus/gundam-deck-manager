@@ -8,6 +8,7 @@ import {
   type DeckState,
 } from './allocation';
 import type { CardMeta } from './validation';
+import { chunks, queryInChunks, queryInChunks2 } from '../util/d1';
 
 export interface CardLocationRow {
   productId: string;
@@ -40,12 +41,12 @@ export async function loadDeckStates(db: DB, userId: number): Promise<DeckState[
   if (deckRows.length === 0) return [];
 
   const deckIds = deckRows.map((d) => d.id);
-  const dcRows = await db.select().from(deckCards).where(inArray(deckCards.deckId, deckIds)).all();
-  const allocRows = await db
-    .select()
-    .from(allocations)
-    .where(inArray(allocations.deckId, deckIds))
-    .all();
+  const dcRows = await queryInChunks(deckIds, (ids) =>
+    db.select().from(deckCards).where(inArray(deckCards.deckId, ids)).all(),
+  );
+  const allocRows = await queryInChunks(deckIds, (ids) =>
+    db.select().from(allocations).where(inArray(allocations.deckId, ids)).all(),
+  );
 
   const byId = new Map<number, DeckState>();
   for (const d of deckRows) {
@@ -264,10 +265,9 @@ export async function getCardLocations(
   const deckRows = await db.select().from(decks).where(eq(decks.userId, userId)).all();
   const deckName = new Map(deckRows.map((d) => [d.id, d.name] as const));
   const deckIds = deckRows.map((d) => d.id);
-  const allocRows =
-    deckIds.length === 0
-      ? []
-      : await db.select().from(allocations).where(inArray(allocations.deckId, deckIds)).all();
+  const allocRows = await queryInChunks(deckIds, (ids) =>
+    db.select().from(allocations).where(inArray(allocations.deckId, ids)).all(),
+  );
 
   const out: Record<
     string,
@@ -356,14 +356,13 @@ export async function listCardLocations(
   const deckRows = await db.select().from(decks).where(eq(decks.userId, userId)).all();
   const deckName = new Map(deckRows.map((d) => [d.id, d.name] as const));
   const deckIds = deckRows.map((d) => d.id);
-  const allocRows =
-    deckIds.length === 0
-      ? []
-      : await db
-          .select()
-          .from(allocations)
-          .where(and(inArray(allocations.deckId, deckIds), inArray(allocations.productId, productIds)))
-          .all();
+  const allocRows = await queryInChunks2(deckIds, productIds, (deckChunk, productChunk) =>
+    db
+      .select()
+      .from(allocations)
+      .where(and(inArray(allocations.deckId, deckChunk), inArray(allocations.productId, productChunk)))
+      .all(),
+  );
 
   const decksByProduct = new Map<string, { deckId: number; name: string; qty: number }[]>();
   for (const a of allocRows) {
@@ -429,11 +428,11 @@ export async function setCardLocation(
 
   const deckIds = [...userDeckIds];
   const stmts = [];
-  if (deckIds.length > 0) {
+  for (const ids of chunks(deckIds)) {
     stmts.push(
       db
         .delete(allocations)
-        .where(and(eq(allocations.productId, productId), inArray(allocations.deckId, deckIds))),
+        .where(and(eq(allocations.productId, productId), inArray(allocations.deckId, ids))),
     );
   }
   for (const [deckId, quantity] of byDeck) {

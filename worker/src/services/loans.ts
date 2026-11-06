@@ -24,6 +24,7 @@ import {
   loadDeckStates,
 } from './deckState';
 import { findLoanContactById, findOrCreateLoanContact } from './loanContacts';
+import { queryInChunks } from '../util/d1';
 
 export type LoanItemInput = { productId: string; quantity: number };
 export type DeckImpact = { deckId: number; name: string };
@@ -58,14 +59,13 @@ export async function releaseCopies(
   const deckIds = deckRows.map((d) => d.id);
   const deckById = new Map(deckRows.map((d) => [d.id, d]));
 
-  const allocRows =
-    deckIds.length === 0
-      ? []
-      : await db
-          .select()
-          .from(allocations)
-          .where(and(inArray(allocations.deckId, deckIds), eq(allocations.productId, productId)))
-          .all();
+  const allocRows = await queryInChunks(deckIds, (ids) =>
+    db
+      .select()
+      .from(allocations)
+      .where(and(inArray(allocations.deckId, ids), eq(allocations.productId, productId)))
+      .all(),
+  );
 
   let allocated = 0;
   for (const a of allocRows) allocated += a.quantity;
@@ -306,10 +306,9 @@ async function resolveLendItems(
 
   const deckRows = await db.select().from(decks).where(eq(decks.userId, lenderId)).all();
   const deckIds = deckRows.map((d) => d.id);
-  const allocRows =
-    deckIds.length === 0
-      ? []
-      : await db.select().from(allocations).where(inArray(allocations.deckId, deckIds)).all();
+  const allocRows = await queryInChunks(deckIds, (ids) =>
+    db.select().from(allocations).where(inArray(allocations.deckId, ids)).all(),
+  );
   const allocatedByProduct = new Map<string, number>();
   for (const a of allocRows) {
     if (a.quantity <= 0) continue;
@@ -792,10 +791,9 @@ export async function getCollectionStatus(
     .all();
   const deckName = new Map(deckRows.map((d) => [d.id, d.name] as const));
   const deckIds = deckRows.map((d) => d.id);
-  const allocRows =
-    deckIds.length === 0
-      ? []
-      : await db.select().from(allocations).where(inArray(allocations.deckId, deckIds)).all();
+  const allocRows = await queryInChunks(deckIds, (ids) =>
+    db.select().from(allocations).where(inArray(allocations.deckId, ids)).all(),
+  );
 
   const decksByProduct = new Map<string, { deckId: number; name: string; qty: number }[]>();
   for (const a of allocRows) {

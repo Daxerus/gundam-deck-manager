@@ -17,6 +17,7 @@ import {
 import { sumAllocatedForCardNumber } from '../services/allocation';
 import { getOwnedDeck } from '../services/scope';
 import { validateDeck } from '../services/validation';
+import { queryInChunks } from '../util/d1';
 import { readJson } from '../util/json';
 
 export const decksRoutes = new Hono<AppEnv>()
@@ -106,10 +107,9 @@ export const decksRoutes = new Hono<AppEnv>()
         }),
       ),
     ];
-    const cardRows =
-      representativeIds.length === 0
-        ? []
-        : await db.select().from(cards).where(inArray(cards.productId, representativeIds)).all();
+    const cardRows = await queryInChunks(representativeIds, (ids) =>
+      db.select().from(cards).where(inArray(cards.productId, ids)).all(),
+    );
     const cardByProductId = new Map(cardRows.map((row) => [row.productId, row] as const));
 
     const resolvedCards = dcRows.map((d) => {
@@ -200,11 +200,13 @@ export const decksRoutes = new Hono<AppEnv>()
 
     const cardNumbers = [...qtyByNumber.keys()];
     if (cardNumbers.length > 0) {
-      const found = await db
-        .select({ cardNumber: cards.cardNumber })
-        .from(cards)
-        .where(inArray(cards.cardNumber, cardNumbers))
-        .all();
+      const found = await queryInChunks(cardNumbers, (ids) =>
+        db
+          .select({ cardNumber: cards.cardNumber })
+          .from(cards)
+          .where(inArray(cards.cardNumber, ids))
+          .all(),
+      );
       const foundSet = new Set(found.map((row) => row.cardNumber));
       const missing = cardNumbers.filter((cn) => !foundSet.has(cn));
       if (missing.length > 0) return c.json({ error: 'Card not found', missing }, 404);
